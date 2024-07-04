@@ -1,0 +1,19 @@
+targetCustomizations:
+- name: teste
+  clusterSelector:
+    matchLabels:
+      env: teste
+  yaml:
+    overlays:
+    # Refers to overlays/noreplication folder
+    - suc-teste
+
+- name: prod
+  clusterSelector:
+    matchLabels:
+      env: prod
+  yaml:
+    overlays:
+    # Refers to overlays/scale3 folder
+    - suc-prod
+

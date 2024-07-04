@@ -67,7 +67,7 @@ spec:
       zypper -n in iputils
       sleep 240
       #Adicionar os nomes dos servidores que serão verificados no Cluster.
-      for server in rancher1 rancher2 rancher3; do
+      for server in 192.168.20.114 192.168.20.113 192.168.20.112; do
         echo -e "\e[1m\e[33mChecando a disponibilidade do servidor "$server"\e[0m"
         while ! ping -c 5 $server; do
           echo -e "\e[31m\e[1mNenhuma resposta do servidor "$server"\e[0m"
