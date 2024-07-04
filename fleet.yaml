@@ -2,7 +2,7 @@ targetCustomizations:
 - name: teste
   clusterSelector:
     matchLabels:
-      env: teste
+      management.cattle.io/cluster-display-name: teste
   yaml:
     overlays:
     # Refers to overlays/noreplication folder
@@ -11,7 +11,7 @@ targetCustomizations:
 - name: prod
   clusterSelector:
     matchLabels:
-      env: prod
+      management.cattle.io/cluster-display-name: prod
   yaml:
     overlays:
     # Refers to overlays/scale3 folder
