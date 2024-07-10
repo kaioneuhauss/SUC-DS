@@ -48,7 +48,7 @@ stringData:
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
 metadata:
-  name: rke2-update
+  name: rke2-update-teste
   namespace: rke2-update
 spec:
   concurrency: 1
@@ -85,7 +85,7 @@ spec:
       path: /host/run/system-upgrade/secrets/update
   drain:
     force: false
-  version: sles-10-07-2024
+  version: sles-11-07-2024
   upgrade:
     image: registry.suse.com/bci/bci-base:latest
     command: ["chroot", "/host"]
