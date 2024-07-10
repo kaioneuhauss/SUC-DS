@@ -1,0 +1,20 @@
+dependsOn:
+  - name: suc-so
+targetCustomizations:
+- name: teste
+  clusterSelector:
+    matchLabels:
+      management.cattle.io/cluster-display-name: teste
+  yaml:
+    overlays:
+    # Refers to overlays/noreplication folder
+    - plano-teste-so
+
+- name: prod
+  clusterSelector:
+    matchLabels:
+      management.cattle.io/cluster-display-name: prod
+  yaml:
+    overlays:
+    # Refers to overlays/scale3 folder
+    - plano-prod-so

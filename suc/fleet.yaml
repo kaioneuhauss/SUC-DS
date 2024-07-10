@@ -1,3 +1,4 @@
+name: suc-so
 targetCustomizations:
 - name: teste
   clusterSelector:
@@ -6,7 +7,7 @@ targetCustomizations:
   yaml:
     overlays:
     # Refers to overlays/noreplication folder
-    - suc-teste
+    - suc-teste-so
 
 - name: prod
   clusterSelector:
@@ -15,5 +16,4 @@ targetCustomizations:
   yaml:
     overlays:
     # Refers to overlays/scale3 folder
-    - suc-prod
-
+    - suc-prod-so
