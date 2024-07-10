@@ -65,7 +65,7 @@ spec:
     args:
     - |
       zypper -n in iputils
-      sleep 240
+      sleep 180
       #Adicionar os nomes dos servidores que serão verificados no Cluster.
       for server in 192.168.20.119 192.168.20.120 192.168.20.118 192.168.20.121 192.168.20.117; do
         echo -e "\e[1m\e[33mChecando a disponibilidade do servidor "$server"\e[0m"
@@ -85,7 +85,7 @@ spec:
       path: /host/run/system-upgrade/secrets/update
   drain:
     force: false
-  version: sles-09-07-2024
+  version: sles-10-07-2024
   upgrade:
     image: registry.suse.com/bci/bci-base:latest
     command: ["chroot", "/host"]
