@@ -1,4 +1,6 @@
 name: suc-so-prod
+helm:
+  takeOwnership: true
 targetCustomizations:
   #- name: teste
   #  clusterSelector:
