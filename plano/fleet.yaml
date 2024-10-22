@@ -1,6 +1,6 @@
 name: suc-plano-prod
 dependsOn:
-  - name: suc-so
+  - name: suc-so-prod
 targetCustomizations:
   #- name: teste
   #  clusterSelector:
