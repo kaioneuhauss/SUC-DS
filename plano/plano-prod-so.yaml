@@ -65,6 +65,7 @@ spec:
     args:
     - |
       zypper -n in iputils
+      echo -e "\e[31m\e[1mO Os patches serão realizados daqui 2 minutos, aguarde enquanto isso.\e[0m"
       sleep 120
       #Adicionar os nomes dos servidores que serão verificados no Cluster.
       for server in 192.168.20.94 192.168.20.95 192.168.20.96 192.168.20.97 192.168.20.98 192.168.20.81; do
