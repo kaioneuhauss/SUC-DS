@@ -12,7 +12,7 @@ spec:
   jobActiveDeadlineSecs: 18000
   postCompleteDelay: 30s
   serviceAccountName: os-maintenance
-  version: mpba-update-03
+  version: mpba-update-04
   nodeSelector:
     matchLabels:
       kubernetes.io/os: linux
