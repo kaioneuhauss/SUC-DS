@@ -35,6 +35,8 @@
 
 ## Execução real
 
-Pendente: implantação do controller dedicado, preparação dos hosts, duas rodadas e integração Fleet. O release inicial em cattle-system foi instalado por Helm, mas não criou Jobs porque o SUC gerenciado está com zero réplicas. A revisão automática solicitou autorização explícita para a desativação persistente dos timers e para os Jobs privilegiados de manutenção. Nenhum update/reboot foi executado até esta versão do relatório. A alteração de duas réplicas Longhorn foi executada e validada separadamente.
+Pendente: implantação do controller dedicado, preparação dos hosts, duas rodadas e integração Fleet. O release inicial em cattle-system foi instalado por Helm, mas não criou Jobs porque o SUC gerenciado está com zero réplicas. O usuário autorizou explicitamente verificar e ajustar timer/rebootmgr nos cinco nós. A revisão automática exigiu autorização adicional para instalar o controller dedicado; essa decisão ainda está pendente. Nenhum controller adicional foi instalado. Nenhum update/reboot foi executado até esta versão do relatório. A alteração de duas réplicas Longhorn foi executada e validada separadamente.
 
 O perfil SLES tradicional ainda não foi executado em um host SLES tradicional. Testes simulados não certificam reboot, aplicação, filesystem, restauração ou suporte formal. A execução real precisa ser registrada abaixo antes de declarar a validação completa.
+
+A função de saúde foi executada, somente em leitura, contra o cluster real e retornou PASS (API, leases, nós, workloads e Longhorn). Commit local inicial: 42c5e1f. O push não ocorreu: não há credencial HTTPS acessível e a chave SSH disponível foi recusada pelo GitHub.
