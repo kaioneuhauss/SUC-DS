@@ -64,7 +64,7 @@ kubectl get nodes -o json | jq '.items[] | {node:.metadata.name,prepared:.metada
 
 ## 4. Executar a rodada
 
-Após todos os hosts preparados e o Plan completo, edite `plano/os-upgrade-plan.yaml`: troque o valor de `ACTION` para `update` e `spec.version` para um identificador novo, por exemplo `mpba-update-01`. Mantenha os demais campos, revise o diff e publique:
+Após todos os hosts preparados e o Plan completo, edite `plano/os-upgrade-plan.yaml`: troque o valor de `ACTION` para `update` e `spec.version` para um identificador novo, por exemplo `mpba-update-05` para a próxima rodada após os testes deste lab. Mantenha os demais campos, revise o diff e publique:
 
 ```bash
 git diff -- plano/os-upgrade-plan.yaml
@@ -218,7 +218,9 @@ Para desistir da automação, aguarde o fim de qualquer transação. Remova o la
 
 O `examples/fleet-gitrepo.yaml` aponta somente para `plano`, com seletor do cluster `mpba-teste`. Fleet pode gerenciar YAML puro; não é necessário criar Chart.yaml, templates ou values. Faça o commit/push dos arquivos antes de criar o GitRepo no contexto de management. Depois que Fleet assumir, mantenha alterações de Plan/Secret no Git para evitar que o reconciliador reverta ajustes manuais.
 
-O Fleet 0.15.4 observado usa Helm internamente também para YAML puro. O campo `helm.releaseName: suc-os-mpba` apenas conserva a identidade do release inicial para sua adoção; não exige chart próprio. Até a adoção pelo Fleet, não execute helm upgrade/rollback/uninstall usando o chart antigo. O controller Rancher tem outro release e deve ser preservado. O estado de GitRepo/BundleDeployment e o resultado do Plan devem ser conferidos separadamente: Ready do Fleet comprova entrega, enquanto Complete do Plan comprova conclusão da manutenção.
+O Fleet 0.15.4 observado usa Helm internamente também para YAML puro. O campo `helm.releaseName: suc-os-mpba` apenas conserva a identidade do release inicial para sua adoção; não exige chart próprio. A adoção já foi concluída no MPBA. Não execute helm upgrade/rollback/uninstall usando o chart antigo. O controller Rancher tem outro release e deve ser preservado. O estado de GitRepo/BundleDeployment e o resultado do Plan devem ser conferidos separadamente: Ready do Fleet comprova entrega, enquanto Complete do Plan comprova conclusão da manutenção.
+
+Na adoção inicial, um conflito herdado de `kubectl` em `spec.version` foi resolvido uma única vez, transferindo a propriedade desse campo ao `fleetagent` após dry-run. Isso não é uma etapa normal de cada rodada; mudanças futuras devem partir do Git. Não use `force-conflicts` como correção genérica sem examinar o conflito.
 
 O exemplo `examples/sles/plano-prod-so.yaml` reutiliza os scripts/RBAC, mas seleciona `PROFILE=sles`, nomes de exemplo e `ACTIVATE_PENDING=false`. Revise os destinos e aplique esse Plan no lugar do Micro, nunca os dois simultaneamente com o mesmo nome. Em SLES tradicional o worker usa `zypper refresh` e `patch --with-update`, aceita códigos informativos 102/103, compara inventário RPM e registra erros. Não use esse perfil em Micro. O laboratório atual não valida esse ramo em SO tradicional.
 
