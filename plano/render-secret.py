@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Gera YAML legivel do Secret. --check verifica sincronizacao sem escrever."""
+"""Gera Secret com data, compativel com server-side apply. --check verifica sincronizacao sem escrever."""
 from pathlib import Path
-import sys
+import sys, base64
 root = Path(__file__).resolve().parent
-out = 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: os-maintenance-scripts\n  namespace: cattle-system\ntype: Opaque\nstringData:\n'
+out = 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: os-maintenance-scripts\n  namespace: cattle-system\ntype: Opaque\ndata:\n'
 for path in sorted((root / 'scripts').iterdir()):
     if path.is_file():
-        out += f'  {path.name}: |\n'
-        out += ''.join('    ' + line + '\n' for line in path.read_text().splitlines())
+        out += f'  {path.name}: {base64.b64encode(path.read_bytes()).decode()}\n'
 target = root / 'os-upgrade-secret.yaml'
 if '--check' in sys.argv:
     if target.read_text() != out:
