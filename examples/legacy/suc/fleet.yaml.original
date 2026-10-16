@@ -1,0 +1,21 @@
+name: suc-so-prod
+helm:
+  takeOwnership: true
+targetCustomizations:
+  #- name: teste
+  #  clusterSelector:
+  #    matchLabels:
+  #      management.cattle.io/cluster-display-name: teste
+  #  yaml:
+  #    overlays:
+  #    # Refers to overlays/noreplication folder
+  #    - suc-teste-so
+
+- name: prod
+  clusterSelector:
+    matchLabels:
+      management.cattle.io/cluster-display-name: prod
+  yaml:
+    overlays:
+    # Refers to overlays/scale3 folder
+    - suc-prod-so
