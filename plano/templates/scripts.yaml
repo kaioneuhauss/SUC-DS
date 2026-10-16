@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.planName }}-scripts
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+{{ (.Files.Glob "scripts/*").AsConfig | indent 2 }}
+  policy.json: |
+    {{ dict "allowEmptyDirDeletion" .Values.allowEmptyDirDeletion "remoteCSIDrivers" .Values.remoteCSIDrivers "hostPathAllowlist" .Values.hostPathAllowlist | toJson }}

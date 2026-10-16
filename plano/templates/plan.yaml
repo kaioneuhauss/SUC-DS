@@ -1,0 +1,50 @@
+{{- if .Values.enabled }}
+{{- if not .Values.nodeNames }}{{ fail "Defina nodeNames explicitamente antes de habilitar o Plan" }}{{ end }}
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: {{ .Values.planName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    upgrade.cattle.io/digest: spec.upgrade.envs,spec.upgrade.image
+spec:
+  concurrency: 1
+  exclusive: true
+  jobActiveDeadlineSecs: {{ .Values.jobActiveDeadlineSeconds }}
+  postCompleteDelay: {{ .Values.postCompleteDelay }}
+  serviceAccountName: {{ .Values.planName }}
+  version: {{ .Values.round | quote }}
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/os: linux
+    matchExpressions:
+      - key: kubernetes.io/hostname
+        operator: In
+        values: {{ .Values.nodeNames | toJson }}
+  tolerations:
+    - operator: Exists
+  # O script executa cordon/drain/uncordon para registrar falhas e validar a
+  # recuperacao ANTES de terminar o Job. Nao duplicar drain nativo neste Plan.
+  secrets:
+    - name: {{ .Values.planName }}-scripts
+      path: /run/suc-os
+  upgrade:
+    image: {{ .Values.image | quote }}
+    command: [/bin/bash]
+    args: [/run/suc-os/run.sh]
+    securityContext:
+      privileged: true
+      runAsUser: 0
+    envs:
+      - {name: PLAN_NAMESPACE, value: {{ .Release.Namespace | quote }}}
+      - {name: ACTION, value: {{ .Values.action | quote }}}
+      - {name: PROFILE, value: {{ .Values.profile | quote }}}
+      - {name: EXPECTED_NODES, value: {{ join "," .Values.nodeNames | quote }}}
+      - {name: LH_NAMESPACE, value: {{ .Values.longhornNamespace | quote }}}
+      - {name: HEALTH_TIMEOUT, value: {{ .Values.healthTimeoutSeconds | quote }}}
+      - {name: STABLE_SECONDS, value: {{ .Values.stableSeconds | quote }}}
+      - {name: DRAIN_TIMEOUT, value: {{ .Values.drainTimeout | quote }}}
+      - {name: HOST_TIMEOUT, value: {{ .Values.hostTimeoutSeconds | quote }}}
+      - {name: ACTIVATE_PENDING, value: {{ .Values.activatePendingSnapshot | quote }}}
+      - {name: MANAGE_AUTOMATIC, value: {{ .Values.manageAutomaticUpdates | quote }}}
+{{- end }}

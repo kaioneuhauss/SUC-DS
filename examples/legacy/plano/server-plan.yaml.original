@@ -1,0 +1,67 @@
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: os-sle-micro62-server
+  namespace: cattle-system
+spec:
+  concurrency: 1
+  exclusive: true
+  jobActiveDeadlineSecs: 86400
+  postCompleteDelay: 2m
+  serviceAccountName: system-upgrade-controller
+
+  # Use a MESMA versao nos dois Plans a cada nova rodada.
+  version: micro62-16-10-2026
+
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/os: linux
+      suc-micro62: enabled
+      suc-micro62-role: server
+
+  tolerations:
+    - operator: Exists
+
+  cordon: true
+
+  drain:
+    ignoreDaemonSets: true
+    force: false
+    disableEviction: false
+    # Nao combinar este campo com deleteLocalData.
+    deleteEmptydirData: false
+    gracePeriod: -1
+    timeout: 2h
+    skipWaitForDeleteTimeout: 0
+
+  secrets:
+    - name: suc-sle-micro62-scripts
+      path: /run/system-upgrade/secrets/micro62
+
+  prepare:
+    # Utilize a imagem do seu cluster Kubernetes RKE2.
+    image: rancher/rke2-upgrade:v1.35.6-rke2r1
+    command: [/bin/bash]
+    args: [/run/system-upgrade/secrets/micro62/prepare.sh]
+    securityContext:
+      privileged: true
+      runAsUser: 0
+    envs:
+      - name: NODE_GROUP
+        value: server
+      - name: LH_NAMESPACE
+        value: longhorn-system
+      - name: CHECK_TIMEOUT
+        value: "7200"
+      - name: WAIT_TIMEOUT
+        value: "43200"
+      - name: REMOTE_CSI_DRIVERS
+        value: ""
+
+  upgrade:
+    image: registry.suse.com/bci/bci-base:15.6
+    command: [/bin/bash]
+    args: [/run/system-upgrade/secrets/micro62/upgrade.sh]
+    securityContext:
+      privileged: true
+      runAsUser: 0

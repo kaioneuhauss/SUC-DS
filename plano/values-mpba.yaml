@@ -1,0 +1,29 @@
+enabled: false
+nodeNames:
+  - master-mbpa1
+  - master-mpba2
+  - master-mpba3
+  - worker-mpba1
+  - worker-mpba2
+# Exclusivamente para este lab: perda do historico temporario autorizada em 16/10/2026.
+allowEmptyDirDeletion: true
+# Snapshot previamente criado pelo timer sera ativado apos drain, sem sobrescreve-lo.
+activatePendingSnapshot: true
+# Transferir a responsabilidade de updates/reboot do timer para o SUC.
+manageAutomaticUpdates: true
+hostPathAllowlist:
+  - namespace: longhorn-system
+    serviceAccount: longhorn-service-account
+    ownerKind: ReplicaSet
+    paths: [/var/lib/kubelet/plugins/driver.longhorn.io]
+  - namespace: longhorn-system
+    serviceAccount: longhorn-service-account
+    ownerKind: InstanceManager
+    paths: ['/', /var/lib/longhorn/engine-binaries/, /var/lib/longhorn/unix-domain-socket/, /var/lib/longhorn/logs]
+  - namespace: tigera-operator
+    serviceAccount: tigera-operator
+    ownerKind: ReplicaSet
+    paths: [/var/lib/calico]
+# O SUC do Rancher esta pausado (replicas=0). Instancia dedicada ao namespace de SO.
+controller:
+  enabled: true

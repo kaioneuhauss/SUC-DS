@@ -1,23 +1,10 @@
-name: suc-plano-prod
-dependsOn:
-  - name: suc-so-prod
+name: suc-os-mpba
+defaultNamespace: suc-os-system
 helm:
-  takeOwnership: true
-targetCustomizations:
-  #- name: teste
-  #  clusterSelector:
-  #    matchLabels:
-  #      management.cattle.io/cluster-display-name: teste
-  #  yaml:
-  #    overlays:
-  #    # Refers to overlays/noreplication folder
-  #    - plano-teste-so
-
-- name: prod
-  clusterSelector:
-    matchLabels:
-      management.cattle.io/cluster-display-name: prod
-  yaml:
-    overlays:
-    # Refers to overlays/scale3 folder
-    - plano-prod-so
+  chart: .
+  releaseName: suc-os-mpba
+  valuesFiles:
+    - values-mpba.yaml
+  values:
+    enabled: false
+# O GitRepo deve selecionar somente mpba-teste; exemplo em ../examples/fleet-gitrepo.yaml.
