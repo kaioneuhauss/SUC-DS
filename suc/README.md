@@ -1,1 +1,0 @@
-O SUC e gerenciado pelo Rancher. Nao instalar outro controller para estes Plans. Os manifests antigos estao em ../examples/legacy/suc/ com extensao .original. O caminho ativo Fleet e somente ../plano/.
