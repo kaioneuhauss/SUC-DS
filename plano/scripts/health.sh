@@ -14,9 +14,9 @@ health_once() {
   k -n kube-node-lease get leases -o json > "$TMP/leases.json" || return 1
   jq -e --arg expected "$EXPECTED_NODES" --argjson now "$(date +%s)" '
     .items as $leases | all(($expected|split(","))[]; . as $n |
-      any($leases[]; .metadata.name==$n and
+      any($leases[];
       (.spec.renewTime | sub("\\.[0-9]+Z$";"Z") | fromdateiso8601) as $t |
-      ($now-$t < 120 and $now-$t > -120)))' "$TMP/leases.json" >/dev/null || return 1
+      (.metadata.name==$n and ($now-$t) < 120 and ($now-$t) > -120)))' "$TMP/leases.json" >/dev/null || return 1
   longhorn_health || return 1
   k get deployment,statefulset,daemonset -A -o json > "$TMP/workloads.json" || return 1
   jq -e 'all(.items[];
@@ -62,4 +62,14 @@ longhorn_health() {
   jq -e '(.items|length)>0 and all(.items[]; any(.status.conditions[]?; .type=="Ready" and .status=="True"))' "$TMP/lh-nodes.json" >/dev/null || return 1
   jq -e 'all(.items[]; all((.status.replicaModeMap // {})[]; .=="RW"))' "$TMP/engines.json" >/dev/null || return 1
   return 0
+}
+
+# Kubelet pode aceitar Pods antes de a unidade Type=notify do RKE2 ficar active.
+wait_rke2() {
+  local deadline=$((SECONDS+600))
+  until host /bin/bash -c 'if systemctl is-enabled rke2-server.service >/dev/null 2>&1; then systemctl is-active --quiet rke2-server; else systemctl is-active --quiet rke2-agent; fi'; do
+    (( SECONDS < deadline )) || fail 'RKE2 nao ficou ativo em 600s; examinar journalctl -u rke2-server/-agent.'
+    log 'Aguardando inicializacao do servico RKE2; fila permanece bloqueada.'
+    sleep 10
+  done
 }

@@ -1,10 +1,5 @@
-name: suc-os-mpba
-defaultNamespace: suc-os-system
+defaultNamespace: cattle-system
+# YAML puro. Este nome permite ao Fleet reutilizar o registro do release inicial.
+# Nao ha Chart.yaml, templates nem values para manter.
 helm:
-  chart: .
   releaseName: suc-os-mpba
-  valuesFiles:
-    - values-mpba.yaml
-  values:
-    enabled: false
-# O GitRepo deve selecionar somente mpba-teste; exemplo em ../examples/fleet-gitrepo.yaml.

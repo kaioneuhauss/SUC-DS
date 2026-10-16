@@ -1,6 +1,8 @@
 #!/bin/bash
 set -Eeuo pipefail
 export LC_ALL=C
+# RKE2 em raiz imutavel instala os binarios em /opt/rke2/bin.
+export PATH="$PATH:/opt/rke2/bin"
 profile=${1:?}
 . /etc/os-release
 if [[ $profile == micro62 ]]; then
@@ -20,3 +22,7 @@ for p in / /var; do
   available=$(df -Pk "$p" | awk 'NR==2 {print $4}')
   (( available >= 2097152 ))
 done
+
+if systemctl is-active --quiet rke2-server; then
+  command -v rke2 >/dev/null || { echo "ERRO: rke2 ausente em PATH; conferir /opt/rke2/bin ou instalacao do servidor antes do drain." >&2; exit 1; }
+fi

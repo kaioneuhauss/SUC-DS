@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Gera Secret com data, compativel com server-side apply. --check verifica sincronizacao sem escrever."""
+from pathlib import Path
+import sys, base64
+root = Path(__file__).resolve().parent
+out = 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: os-maintenance-scripts\n  namespace: cattle-system\ntype: Opaque\ndata:\n'
+for path in sorted((root / 'scripts').iterdir()):
+    if path.is_file():
+        out += f'  {path.name}: {base64.b64encode(path.read_bytes()).decode()}\n'
+target = root / 'os-upgrade-secret.yaml'
+if '--check' in sys.argv:
+    if target.read_text() != out:
+        sys.exit('Secret desatualizado: execute python3 plano/render-secret.py')
+    print('Secret sincronizado com scripts: PASS')
+else:
+    target.write_text(out)

@@ -1,0 +1,33 @@
+{
+  "allowEmptyDirDeletion": true,
+  "hostPathAllowlist": [
+    {
+      "namespace": "longhorn-system",
+      "ownerKind": "ReplicaSet",
+      "paths": [
+        "/var/lib/kubelet/plugins/driver.longhorn.io"
+      ],
+      "serviceAccount": "longhorn-service-account"
+    },
+    {
+      "namespace": "longhorn-system",
+      "ownerKind": "InstanceManager",
+      "paths": [
+        "/",
+        "/var/lib/longhorn/engine-binaries/",
+        "/var/lib/longhorn/unix-domain-socket/",
+        "/var/lib/longhorn/logs"
+      ],
+      "serviceAccount": "longhorn-service-account"
+    },
+    {
+      "namespace": "tigera-operator",
+      "ownerKind": "ReplicaSet",
+      "paths": [
+        "/var/lib/calico"
+      ],
+      "serviceAccount": "tigera-operator"
+    }
+  ],
+  "remoteCSIDrivers": []
+}

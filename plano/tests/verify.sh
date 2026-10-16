@@ -1,7 +1,8 @@
 #!/bin/bash
 set -Eeuo pipefail
-chart=$(cd -- "$(dirname -- "$0")/.." && pwd)
-for script in "$chart"/scripts/*.sh; do bash -n "$script"; done
-python3 "$chart/tests/test_safety.py"
-bash "$chart/tests/test_health_cases.sh"
-helm lint "$chart" --namespace suc-os-system -f "$chart/values-mpba.yaml" --set enabled=true
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+for script in "$root"/scripts/*.sh; do bash -n "$script"; done
+python3 "$root/tests/test_safety.py"
+bash "$root/tests/test_health_cases.sh"
+bash "$root/tests/test_cluster_health.sh"
+python3 "$root/render-secret.py" --check

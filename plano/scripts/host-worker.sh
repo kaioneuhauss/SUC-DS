@@ -2,6 +2,8 @@
 # Executado como unidade do systemd do host, fora do cgroup do Pod.
 set -Eeuo pipefail
 export LC_ALL=C
+# RKE2 em raiz imutavel instala os binarios em /opt/rke2/bin.
+export PATH="$PATH:/opt/rke2/bin"
 STATE=${1:?}
 PROFILE=${2:?}
 ACTIVATE_PENDING=${3:-false}
@@ -15,6 +17,7 @@ on_exit() {
     echo 'ERRO: transacao interrompida. Corrigir causa antes de remover trava; nenhum reboot autorizado por este erro.' >&2
   fi
 }
+trap 'rc=$?; echo "ERRO host linha=$LINENO exit=$rc comando=$BASH_COMMAND" >&2' ERR
 trap on_exit EXIT
 trap 'exit 143' TERM
 exec 9>/var/lib/suc-os/host-update.lock

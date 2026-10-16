@@ -4,7 +4,25 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/health.sh"
 TMP=$(mktemp -d)
-# Mantido no pod para diagnostico; nao contem credenciais.
+# Referencia a credencial projetada/rotativa do SA; nunca copia o token do host.
+export KUBECONFIG="$TMP/kubeconfig"
+cat > "$KUBECONFIG" <<'KUBE'
+apiVersion: v1
+kind: Config
+clusters:
+- name: cluster
+  cluster:
+    server: https://kubernetes.default.svc:443
+    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+users:
+- name: job
+  user:
+    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+contexts:
+- name: job
+  context: {cluster: cluster, user: job}
+current-context: job
+KUBE
 for t in bash jq kubectl chroot; do command -v "$t" >/dev/null || fail "Ferramenta $t ausente na imagem."; done
 claim_gate
 log "Inicio action=$ACTION profile=$PROFILE hash=$HASH"
@@ -70,7 +88,11 @@ if [[ ! -f $LOCAL_STATE/phase ]]; then
   chmod 700 "$LOCAL_STATE/host-worker.sh"
   # O systemd do host mantem a transacao viva se o container morrer/reiniciar.
   host systemd-run --unit="suc-os-$HASH.service" --property=Type=oneshot --property="TimeoutStartSec=$HOST_TIMEOUT" \
-    /bin/bash "$STATE/host-worker.sh" "$STATE" "$PROFILE" "$ACTIVATE_PENDING"
+    /bin/bash "$STATE/host-worker.sh" "$STATE" "$PROFILE" "$ACTIVATE_PENDING" || {
+      host journalctl -u "suc-os-$HASH.service" -n 80 --no-pager || true
+      [[ $(cat "$LOCAL_STATE/phase" 2>/dev/null || true) == reboot-pending ]] ||
+        fail 'Unidade do host falhou; erro detalhado acima. Corrigir a causa antes de retomar; trava preservada.'
+    }
 fi
 
 deadline=$((SECONDS+HOST_TIMEOUT+600))
@@ -89,7 +111,7 @@ while (( SECONDS < deadline )); do
           [[ $current == "$target" ]] || fail "Snapshot ativo $current difere de $target; possivel rollback."
         fi
         host /bin/bash -s -- "$PROFILE" < "$SCRIPT_DIR/host-preflight.sh" || fail 'Verificacao do host apos update falhou.'
-        host /bin/bash -c 'if systemctl is-enabled rke2-server.service >/dev/null 2>&1; then systemctl is-active --quiet rke2-server; else systemctl is-active --quiet rke2-agent; fi' || fail 'Servico RKE2 nao recuperou; examinar journalctl -u rke2-server/-agent.'
+        wait_rke2
         gate_phase verifying
         k uncordon "$NODE"
         # Longhorn pode precisar do uncordon para reconstruir replicas neste no.

@@ -30,7 +30,7 @@ class HostWorker(unittest.TestCase):
         (base/'current').write_text('100');(base/'target').write_text('101' if pending else '100')
         mocks={
             'systemctl': '''#!/bin/bash
-if [[ $1 == show ]]; then echo inactive; elif [[ $1 == is-active ]]; then exit 1; elif [[ $1 == reboot ]]; then touch "$CASE/reboot"; kill -TERM "$PPID"; fi
+if [[ $1 == show ]]; then echo inactive; elif [[ $1 == is-active ]]; then [[ $MODE == server* ]]; elif [[ $1 == reboot ]]; then touch "$CASE/reboot"; kill -TERM "$PPID"; fi
 ''',
             'btrfs': '''#!/bin/bash
 if [[ $1 == inspect-internal ]]; then cat "$CASE/current"; else echo "ID $(cat "$CASE/target") gen 1 top level 1 path snapshot"; fi
@@ -39,6 +39,7 @@ if [[ $1 == inspect-internal ]]; then cat "$CASE/current"; else echo "ID $(cat "
 touch "$CASE/update"
 case "$MODE" in fail) exit 42;; change) echo 101 > "$CASE/target";; esac
 ''',
+            'rke2': '#!/bin/bash\necho "$*" > "$CASE/snapshot"\n[[ $MODE != serverfail ]]\n',
             'sleep': '#!/bin/bash\nexit 0\n',
             'sync': '#!/bin/bash\nexit 0\n',
         }
@@ -49,6 +50,10 @@ case "$MODE" in fail) exit 42;; change) echo 101 > "$CASE/target";; esac
         env=dict(os.environ,PATH=str(bindir)+':'+os.environ['PATH'],CASE=str(base),MODE=mode)
         r=subprocess.run(['bash',str(worker),str(state),'micro62',str(allow).lower()],env=env,capture_output=True,text=True,timeout=10)
         return r,base,state
+    def test_server_snapshot_before_update(self):
+        r,b,s=self.run_worker('serverok');self.assertEqual(r.returncode,0,r.stderr);self.assertIn('etcd-snapshot save --name pre-os-abc',(b/'snapshot').read_text());self.assertTrue((b/'update').exists())
+    def test_server_snapshot_failure_blocks_update(self):
+        r,b,s=self.run_worker('serverfail');self.assertNotEqual(r.returncode,0);self.assertFalse((b/'update').exists());self.assertFalse((b/'reboot').exists());self.assertIn('comando=rke2',r.stderr)
     def test_nochange_never_reboots(self):
         r,b,s=self.run_worker(); self.assertEqual(r.returncode,0,r.stderr); self.assertFalse((b/'reboot').exists());self.assertEqual((s/'phase').read_text().strip(),'done'); self.assertIn('NAO sera reiniciado',r.stdout)
     def test_update_failure_stops_without_reboot(self):

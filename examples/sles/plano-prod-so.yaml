@@ -1,0 +1,62 @@
+# Exemplo SLES tradicional. Revisar nomes, versoes e policy.json.
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: os-maintenance
+  namespace: cattle-system
+  annotations:
+    upgrade.cattle.io/digest: spec.upgrade.envs,spec.upgrade.image
+spec:
+  concurrency: 1
+  exclusive: true
+  jobActiveDeadlineSecs: 18000
+  postCompleteDelay: 30s
+  serviceAccountName: os-maintenance
+  version: sles-prepare-01
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/os: linux
+      suc-os.cattle.io/enabled: 'true'
+    matchExpressions:
+    - key: kubernetes.io/hostname
+      operator: In
+      values:
+      - sles-node1
+      - sles-node2
+  tolerations:
+  - operator: Exists
+  secrets:
+  - name: os-maintenance-scripts
+    path: /run/suc-os
+  upgrade:
+    image: registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1@sha256:ac50dbeabcb4e1e8a63dfe5715837e35b90f36f742568c9cf470a0adf4d95aef
+    command:
+    - /bin/bash
+    args:
+    - /run/suc-os/run.sh
+    securityContext:
+      privileged: true
+      runAsUser: 0
+    envs:
+    - name: PLAN_NAMESPACE
+      value: cattle-system
+    - name: ACTION
+      value: prepare-host
+    - name: PROFILE
+      value: sles
+    - name: EXPECTED_NODES
+      value: sles-node1,sles-node2
+    - name: LH_NAMESPACE
+      value: longhorn-system
+    - name: HEALTH_TIMEOUT
+      value: '1800'
+    - name: STABLE_SECONDS
+      value: '60'
+    - name: DRAIN_TIMEOUT
+      value: 30m
+    - name: HOST_TIMEOUT
+      value: '7200'
+    - name: ACTIVATE_PENDING
+      value: 'false'
+    - name: MANAGE_AUTOMATIC
+      value: 'true'
