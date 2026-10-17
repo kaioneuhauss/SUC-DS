@@ -14,7 +14,7 @@ O exemplo `examples/sles/plano-prod-so.yaml` é alternativo, para SLES tradicion
 ## Uso no MPBA
 
 1. Espere os dois Plans da rodada anterior terminarem. Confira os cinco nós Ready.
-2. Altere **spec.version nos dois Plans para o mesmo identificador novo**, por exemplo `mpba-update-05`. Mantenha ACTION=update.
+2. Altere **spec.version nos dois Plans para o mesmo identificador novo**, por exemplo `mpba-update-06`. Mantenha ACTION=update.
 3. Publique os quatro YAMLs no mesmo commit da branch main. O GitRepo `fleet-default/suc-os-mpba` entrega os arquivos.
 4. Acompanhe os Jobs em cattle-system. Masters primeiro; workers depois. Um Job de worker pode aparecer em Init enquanto espera: ainda não executa drain nem update.
 5. A rodada acaba quando os dois Plans estão Complete=True, os cinco nós estão Ready/sem cordon e a trava não existe mais.
@@ -22,6 +22,8 @@ O exemplo `examples/sles/plano-prod-so.yaml` é alternativo, para SLES tradicion
 ```bash
 export KUBECONFIG=/home/kaio/.kube/istio-mpba.yaml
 kubectl -n cattle-system get plans
+kubectl -n cattle-system get plans os-maintenance-server os-maintenance-agent \
+  -o custom-columns=NAME:.metadata.name,VERSION:.status.latestVersion,CONDITIONS:.status.conditions
 kubectl -n cattle-system get jobs,pods -l upgrade.cattle.io/controller -o wide
 kubectl -n cattle-system logs -l upgrade.cattle.io/plan=os-maintenance-server --all-containers --prefix --tail=80
 kubectl -n cattle-system logs -l upgrade.cattle.io/plan=os-maintenance-agent --all-containers --prefix --tail=80
@@ -31,7 +33,7 @@ kubectl -n cattle-system get cm suc-os-maintenance-gate --ignore-not-found
 
 Fleet Ready significa entrega; Complete=True nos dois Plans significa manutenção concluída. Não edite versão, parâmetros ou Secret durante Jobs ativos. Qualquer mudança de código/configuração deve usar uma nova versão, igual nos dois Plans, no mesmo commit.
 
-**Esta revisão simplificada ainda não foi publicada nem executada no cluster.** Ela substitui o antigo Plan único os-maintenance. Publicá-la cria dois Plans novos e pode iniciar a rodada 05; faça a migração somente após o Plan antigo terminar e sem Jobs ativos. O Secret novo tem outro nome para não disparar o Plan antigo durante a transição. O Fleet deve remover o Plan/Secret antigos e preservar o controller Rancher.
+**Esta revisão simplificada está publicada pelo Fleet e validada na rodada mpba-update-05.** Ela substituiu o Plan único os-maintenance pelos Plans server/agent. O Fleet removeu o Plan e o Secret antigos, preservou o controller Rancher e confirmou os oito recursos prontos. A próxima rodada deve usar um identificador novo nos dois Plans, por exemplo mpba-update-06.
 
 ## O que normalmente alterar
 
@@ -85,6 +87,8 @@ kubectl create --dry-run=client -f plano/os-upgrade-secret.yaml -o json |
   jq -r '.data["run.sh"]' | base64 -d
 ```
 
+Na política, `allowEmptyDirDeletion` autoriza o descarte de dados temporários; `hostPathAllowlist` exige correspondência de namespace, ServiceAccount, tipo de owner e caminho para cada exceção de infraestrutura; `remoteCSIDrivers` lista drivers remotos revisados além de Longhorn (NFS também é reconhecido). A lista de drivers está vazia por padrão: não adicione um backend sem revisar sua operação durante drain.
+
 Chaves: run.sh (fluxo), common.sh (API/log/trava), wait-servers.sh (ordem dos grupos), health.sh (saúde), host-preflight.sh (SO/ferramentas), host-worker.sh (transação/reboot), storage-guard.jq e policy.json (volumes).
 
 Para editar código/política, extraia as chaves para uma pasta temporária vazia, edite e regenere usando o próprio kubectl; não é necessário manter um gerador no projeto:
@@ -103,6 +107,6 @@ kubectl create secret generic os-maintenance-shared-scripts -n cattle-system \
 
 ## Validação e referências
 
-A revisão simplificada passou em 26 testes anteriores, nove cenários da nova espera server/agent, sintaxe Bash e dry-run da API. Ainda requer validação real do fluxo com dois Plans. Os testes reais das rodadas 03/04 usaram a versão anterior com um Plan; o [relatório permanece no histórico Git](https://github.com/kaioneuhauss/SUC-DS/blob/bba41acf88718051495fdcbab27bd08dc6ade12d/docs/VALIDACAO.md). Não houve novos pacotes nas chamadas de transactional-update anteriores; houve ativação de snapshots pendentes e reboots reais.
+A revisão simplificada passou em 26 testes anteriores, nove cenários da espera server/agent, sintaxe Bash e dry-run da API. A rodada mpba-update-05 validou os dois Plans no cluster: três masters primeiro e dois workers depois, com no máximo um container de manutenção ativo e um nó cordoned por vez. Todos executaram transactional-update; não havia pacotes novos e nenhum reiniciou. Ao final, ambos os Plans estavam Complete=True, os cinco nós Ready/sem cordon, sem trava pendente, os dois volumes Longhorn saudáveis com duas réplicas RW e Prometheus/RabbitMQ respondendo. O controller permaneceu ativo e o system-agent-upgrader em espera. Os cenários sem Longhorn e com volumes locais foram validados por testes simulados; o exemplo SLES tradicional não foi executado em host real. Os testes reais das rodadas 03/04 usaram a versão anterior com um Plan; o [relatório permanece no histórico Git](https://github.com/kaioneuhauss/SUC-DS/blob/bba41acf88718051495fdcbab27bd08dc6ade12d/docs/VALIDACAO.md). Não houve novos pacotes nas chamadas de transactional-update anteriores; houve ativação de snapshots pendentes e reboots reais.
 
 Referências: [SUC Plan](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/doc/plan.md), [SUSE Micro](https://documentation.suse.com/sle-micro/6.2/html/Micro-transactional-updates/index.html), [drain Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/), [Longhorn 1.11.2](https://longhorn.io/docs/1.11.2/maintenance/maintenance/) e [Fleet YAML](https://fleet.rancher.io/explanations/gitrepo-content). Scripts próprios; não representam homologação formal da SUSE.
