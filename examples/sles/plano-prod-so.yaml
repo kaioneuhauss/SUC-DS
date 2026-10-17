@@ -1,8 +1,9 @@
-# Exemplo SLES tradicional. Revisar nomes, versoes e policy.json.
+# Exemplo alternativo para SLES tradicional; nao e incluido pelo Fleet do MPBA.
+# Usa o mesmo Secret e as permissoes de server-plan.yaml. Revisar os nomes antes de aplicar.
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
 metadata:
-  name: os-maintenance
+  name: os-maintenance-sles
   namespace: cattle-system
   annotations:
     upgrade.cattle.io/digest: spec.upgrade.envs,spec.upgrade.image
@@ -26,7 +27,7 @@ spec:
   tolerations:
   - operator: Exists
   secrets:
-  - name: os-maintenance-scripts
+  - name: os-maintenance-shared-scripts
     path: /run/suc-os
   upgrade:
     image: registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1@sha256:ac50dbeabcb4e1e8a63dfe5715837e35b90f36f742568c9cf470a0adf4d95aef
