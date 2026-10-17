@@ -1,0 +1,5 @@
+defaultNamespace: cattle-system
+# YAML puro. Este nome permite ao Fleet reutilizar o registro do release inicial.
+# Nao ha Chart.yaml, templates nem values para manter.
+helm:
+  releaseName: suc-os-mpba
