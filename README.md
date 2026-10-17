@@ -5,16 +5,18 @@ Quatro arquivos de implantação em `plano/`:
 | Arquivo | Para que serve |
 |---|---|
 | `fleet.yaml` | Entrega os YAMLs em cattle-system pelo Fleet. |
-| `server-plan.yaml` | Atualiza os três masters, um por vez. Inclui a conta e as permissões compartilhadas após o Plan. |
+| `server-plan.yaml` | Atualiza os três masters, um por vez, usando a conta existente do SUC. |
 | `agent-plan.yaml` | Espera os três masters concluírem a mesma rodada e atualiza os dois workers, um por vez. |
 | `os-upgrade-secret.yaml` | Contém os scripts compartilhados e a política de volumes. Não contém credenciais. |
 
 O exemplo `examples/sles/plano-prod-so.yaml` é alternativo, para SLES tradicional com zypper. O Fleet do MPBA acompanha somente `plano/`.
 
+**Pré-requisito:** o SUC e a ServiceAccount `cattle-system/system-upgrade-controller` já devem existir. Os dois Plans e o exemplo SLES reutilizam essa conta. No MPBA, ela já está vinculada ao ClusterRole `cluster-admin` pelo ClusterRoleBinding `system-upgrade-controller`; este projeto não cria nem altera essa vinculação. Em outro cluster, confirme as permissões antes de aplicar. A reutilização simplifica os objetos, mas concede aos Jobs as mesmas permissões amplas da conta do controller. O bundle passa a conter somente dois Plans e um Secret; `fleet.yaml` é a configuração de entrega.
+
 ## Uso no MPBA
 
 1. Espere os dois Plans da rodada anterior terminarem. Confira os cinco nós Ready.
-2. Altere **spec.version nos dois Plans para o mesmo identificador novo**, por exemplo `mpba-update-06`. Mantenha ACTION=update.
+2. Altere **spec.version nos dois Plans para o mesmo identificador novo**, por exemplo `mpba-update-07`. Mantenha ACTION=update.
 3. Publique os quatro YAMLs no mesmo commit da branch main. O GitRepo `fleet-default/suc-os-mpba` entrega os arquivos.
 4. Acompanhe os Jobs em cattle-system. Masters primeiro; workers depois. Um Job de worker pode aparecer em Init enquanto espera: ainda não executa drain nem update.
 5. A rodada acaba quando os dois Plans estão Complete=True, os cinco nós estão Ready/sem cordon e a trava não existe mais.
@@ -31,9 +33,9 @@ kubectl get nodes
 kubectl -n cattle-system get cm suc-os-maintenance-gate --ignore-not-found
 ```
 
-Fleet Ready significa entrega; Complete=True nos dois Plans significa manutenção concluída. Não edite versão, parâmetros ou Secret durante Jobs ativos. Qualquer mudança de código/configuração deve usar uma nova versão, igual nos dois Plans, no mesmo commit.
+Fleet Ready significa entrega; Complete=True nos dois Plans significa manutenção concluída. Não edite versão, parâmetros ou Secret durante Jobs ativos. Ao alterar código/configuração para uma nova execução, use uma nova versão, igual nos dois Plans, no mesmo commit. A troca de `serviceAccountName` também altera o hash do SUC e pode iniciar outra execução mesmo sem mudar `spec.version`; publique esta migração somente na próxima janela de manutenção autorizada, junto da nova versão nos dois Plans.
 
-**Esta revisão simplificada está publicada pelo Fleet e validada na rodada mpba-update-05.** Ela substituiu o Plan único os-maintenance pelos Plans server/agent. O Fleet removeu o Plan e o Secret antigos, preservou o controller Rancher e confirmou os oito recursos prontos. A próxima rodada deve usar um identificador novo nos dois Plans, por exemplo mpba-update-06.
+**A estrutura com dois Plans foi publicada pelo Fleet e validada na rodada mpba-update-05, ainda com a conta dedicada `os-maintenance`.** A alteração atual reutiliza a conta do SUC e remove a ServiceAccount, ClusterRole, ClusterRoleBinding, Role e RoleBinding dedicados. A rodada `mpba-update-06` foi preparada para validar essa reutilização, após dry-run da API e verificação das permissões existentes. O Fleet passa a entregar três recursos e remove os cinco objetos dedicados que ficaram fora dos manifestos. Aguarde os dois Plans concluírem antes da próxima manutenção; use um identificador novo nos dois Plans, por exemplo `mpba-update-07`.
 
 ## O que normalmente alterar
 
@@ -55,12 +57,13 @@ Fleet Ready significa entrega; Complete=True nos dois Plans significa manutenç�
 | `jobActiveDeadlineSecs` | Limite total do Job: 18000 s nos masters; 86400 s nos workers, incluindo a espera pelos masters. |
 | `postCompleteDelay: 30s` | Intervalo adicional após cada sucesso. |
 | `upgrade.image` | Imagem fixa por digest. O comando executa nossos scripts, não um upgrade do RKE2. |
-| `serviceAccountName` / `securityContext` | Conta com permissões dedicadas e privilégio necessário para operar o host. |
+| `serviceAccountName` | Reutiliza `system-upgrade-controller` em cattle-system. A conta e suas permissões são pré-requisitos; não são gerenciadas por estes YAMLs. |
+| `securityContext` | Executa como root e com privilégio necessário para operar o host. |
 | `secrets` | Monta o código compartilhado em /run/suc-os. |
 | `tolerations` | Permitem executar nos masters e em nós cordoned. |
 | `PLAN_NAMESPACE` / `LH_NAMESPACE` | Namespace da manutenção e do Longhorn. |
 | `exclusive` | Exclusividade no nó; não substitui a espera entre os dois Plans. |
-| `upgrade.cattle.io/digest` | Inclui configuração da execução no hash; por isso não se edita durante uma rodada. |
+| `upgrade.cattle.io/digest` | Acrescenta os campos listados ao hash. Versão, ServiceAccount e conteúdo dos Secrets já entram no cálculo do SUC; alterações podem disparar outra execução. |
 
 Os hosts MPBA já foram preparados. SUC permanece ativo e o Plan de system-agent deve continuar com label disabled nos cinco nós. Para outro ambiente, revisar destinos, imagem, registro SUSE, backup e política de volumes antes da primeira preparação.
 
