@@ -1,18 +1,19 @@
-# Um Plan para masters e workers: concurrency=1. Exige label de adesao.
+# Edite spec.version nos DOIS Plans com o mesmo identificador de rodada.
+# O prepare espera todos os servers concluirem esta mesma rodada, antes de drenar workers.
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
 metadata:
-  name: os-maintenance
+  name: os-maintenance-agent
   namespace: cattle-system
   annotations:
-    upgrade.cattle.io/digest: spec.upgrade.envs,spec.upgrade.image
+    upgrade.cattle.io/digest: spec.upgrade.envs,spec.upgrade.image,spec.prepare
 spec:
   concurrency: 1
   exclusive: true
-  jobActiveDeadlineSecs: 18000
+  jobActiveDeadlineSecs: 86400
   postCompleteDelay: 30s
   serviceAccountName: os-maintenance
-  version: mpba-update-04
+  version: mpba-update-05
   nodeSelector:
     matchLabels:
       kubernetes.io/os: linux
@@ -21,15 +22,12 @@ spec:
     - key: kubernetes.io/hostname
       operator: In
       values:
-      - master-mbpa1
-      - master-mpba2
-      - master-mpba3
       - worker-mpba1
       - worker-mpba2
   tolerations:
   - operator: Exists
   secrets:
-  - name: os-maintenance-scripts
+  - name: os-maintenance-shared-scripts
     path: /run/suc-os
   upgrade:
     image: registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1@sha256:ac50dbeabcb4e1e8a63dfe5715837e35b90f36f742568c9cf470a0adf4d95aef
@@ -63,3 +61,20 @@ spec:
       value: 'true'
     - name: MANAGE_AUTOMATIC
       value: 'true'
+    - name: PEER_PLAN
+      value: os-maintenance-server
+  prepare:
+    image: registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1@sha256:ac50dbeabcb4e1e8a63dfe5715837e35b90f36f742568c9cf470a0adf4d95aef
+    command:
+    - /bin/bash
+    args:
+    - /run/suc-os/wait-servers.sh
+    envs:
+    - name: PLAN_NAMESPACE
+      value: cattle-system
+    - name: SERVER_PLAN
+      value: os-maintenance-server
+    - name: SERVER_NODES
+      value: master-mbpa1,master-mpba2,master-mpba3
+    - name: WAIT_TIMEOUT
+      value: '43200'
