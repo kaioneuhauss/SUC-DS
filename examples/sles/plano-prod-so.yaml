@@ -1,5 +1,6 @@
 # Exemplo alternativo para SLES tradicional; nao e incluido pelo Fleet do MPBA.
-# Usa o mesmo Secret e as permissoes de server-plan.yaml. Revisar os nomes antes de aplicar.
+# Usa o mesmo Secret e a ServiceAccount system-upgrade-controller existente em cattle-system.
+# Revisar os nomes e confirmar as permissoes dessa conta antes de aplicar.
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
 metadata:
@@ -12,7 +13,7 @@ spec:
   exclusive: true
   jobActiveDeadlineSecs: 18000
   postCompleteDelay: 30s
-  serviceAccountName: os-maintenance
+  serviceAccountName: system-upgrade-controller
   version: sles-prepare-01
   nodeSelector:
     matchLabels:
