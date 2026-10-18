@@ -1,3 +1,5 @@
+# Identidade existente do bundle; preserva os recursos ao renomear o diretorio.
+name: suc-os-mpba-plano
 defaultNamespace: cattle-system
 # YAML puro. Este nome permite ao Fleet reutilizar o registro do release inicial.
 # Nao ha Chart.yaml, templates nem values para manter.
