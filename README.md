@@ -1,157 +1,153 @@
 # Atualização do SO pelo Fleet
 
-Quatro arquivos de implantação em `plano/`:
+O uso normal é **mudar a mesma `version` nos dois Plans e publicar no Git**. O Fleet entrega os YAMLs; o SUC faz a manutenção: servers primeiro, workers depois, um nó em manutenção por vez.
 
-| Arquivo | Para que serve |
+São quatro arquivos em `plano/`, sem chart próprio, gerador ou instalação de Python:
+
+| Arquivo | Função |
 |---|---|
-| `fleet.yaml` | Entrega os YAMLs em cattle-system pelo Fleet. |
-| `server-plan.yaml` | Atualiza os três masters, um por vez, usando a conta existente do SUC. |
-| `agent-plan.yaml` | Espera os três masters concluírem a mesma rodada e atualiza os dois workers, um por vez. |
-| `os-upgrade-secret.yaml` | Contém os scripts compartilhados e a política de volumes. Não contém credenciais. |
+| `fleet.yaml` | Namespace e nome do release usado internamente pelo Fleet. |
+| `server-plan.yaml` | Seleciona Linux com label control-plane e atualiza um server por vez. |
+| `agent-plan.yaml` | Seleciona Linux sem control-plane/etcd; espera os servers da mesma rodada. |
+| `os-upgrade-secret.yaml` | Scripts e política em texto legível (`stringData`), sem credenciais. |
 
-O exemplo `examples/sles/plano-prod-so.yaml` é alternativo, para SLES tradicional com zypper. O Fleet do MPBA acompanha somente `plano/`.
+Os dois Plans reutilizam a ServiceAccount `cattle-system/system-upgrade-controller`, já existente. Este projeto não cria Roles, bindings ou outra conta. No MPBA, essa conta já tem cluster-admin; os Jobs recebem essas permissões amplas. O SUC, a conta e as permissões são pré-requisitos para outro cluster.
 
-**Pré-requisito:** o SUC e a ServiceAccount `cattle-system/system-upgrade-controller` já devem existir. Os dois Plans e o exemplo SLES reutilizam essa conta. No MPBA, ela já está vinculada ao ClusterRole `cluster-admin` pelo ClusterRoleBinding `system-upgrade-controller`; este projeto não cria nem altera essa vinculação. Em outro cluster, confirme as permissões antes de aplicar. A reutilização simplifica os objetos, mas concede aos Jobs as mesmas permissões amplas da conta do controller. O bundle passa a conter somente dois Plans e um Secret; `fleet.yaml` é a configuração de entrega.
+## Passo a passo de uma atualização
 
-## Uso no MPBA
+1. No Rancher, confirme os nós Ready, os dois Plans anteriores Complete=True e ausência de manutenção em andamento. O Fleet Ready confirma a entrega dos arquivos, não o término do update.
+2. Abra `plano/server-plan.yaml` e altere somente `spec.version`, por exemplo:
+   ```yaml
+   version: sles-20261019-01
+   ```
+3. Coloque **exatamente o mesmo valor novo** em `plano/agent-plan.yaml`. Use um identificador que nunca foi executado. `sles-20261019-01` é apenas um nome de rodada: não instala uma release específica do SO e não atualiza Kubernetes.
+4. Publique os dois arquivos juntos no `main` acompanhado pelo GitRepo `fleet-default/suc-os-mpba`. Pela interface do GitHub, edite ambos na mesma branch e integre o PR depois das duas alterações. Não faça dois commits separados diretamente em main durante uma rodada.
+5. No Rancher, abra os Pods do namespace `cattle-system`. Leia **prepare** para acompanhar espera/validações e depois **upgrade** para drain, atualização e resultado.
+6. Aguarde ambos os Plans Complete=True, nós Ready/sem cordon e ausência da trava `suc-os-maintenance-gate`. Só então inicie outra rodada.
 
-1. Espere os dois Plans da rodada anterior terminarem. Confira os cinco nós Ready.
-2. Altere **spec.version nos dois Plans para o mesmo identificador novo**, por exemplo `mpba-update-08`. Mantenha ACTION=update.
-3. Publique os quatro YAMLs no mesmo commit da branch main. O GitRepo `fleet-default/suc-os-mpba` entrega os arquivos.
-4. Acompanhe os Jobs em cattle-system. Masters primeiro; workers depois. Um Job de worker pode aparecer em Init enquanto espera: ainda não executa drain nem update.
-5. A rodada acaba quando os dois Plans estão Complete=True, os cinco nós estão Ready/sem cordon e a trava não existe mais.
+Não é necessário editar scripts, conhecer Bash ou usar Python para esse procedimento. O `transactional-update --non-interactive --drop-if-no-change up` procura as atualizações disponíveis nos repositórios configurados no host. Sem alterações, informa que **não reiniciará** e libera o próximo nó após validar a saúde. O drain ainda pode mover workloads mesmo quando não há pacotes novos.
 
-```bash
-export KUBECONFIG=/home/kaio/.kube/istio-mpba.yaml
-kubectl -n cattle-system get plans
-kubectl -n cattle-system get plans os-maintenance-server os-maintenance-agent \
-  -o custom-columns=NAME:.metadata.name,VERSION:.status.latestVersion,CONDITIONS:.status.conditions
-kubectl -n cattle-system get jobs,pods -l upgrade.cattle.io/controller -o wide
-kubectl -n cattle-system logs -l upgrade.cattle.io/plan=os-maintenance-server --all-containers --prefix --tail=80
-kubectl -n cattle-system logs -l upgrade.cattle.io/plan=os-maintenance-agent --all-containers --prefix --tail=80
-kubectl get nodes
-kubectl -n cattle-system get cm suc-os-maintenance-gate --ignore-not-found
+## Imagem: quando alterar
+
+A imagem está por tag, sem `@sha256`. Para RKE2 `v1.35.6+rke2r1`, usamos:
+
+```yaml
+image: &maintenance_image registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1
 ```
 
-Fleet Ready significa entrega; Complete=True nos dois Plans significa manutenção concluída. Não edite versão, parâmetros ou Secret durante Jobs ativos. Ao alterar código/configuração para uma nova execução, use uma nova versão, igual nos dois Plans, no mesmo commit. A troca de `serviceAccountName` também altera o hash do SUC e pode iniciar outra execução mesmo sem mudar `spec.version`; publique esta migração somente na próxima janela de manutenção autorizada, junto da nova versão nos dois Plans.
+`&maintenance_image` dá um nome a esse valor; `image: *maintenance_image` no upgrade reutiliza a mesma imagem. Assim, há **uma tag para editar em cada Plan**. Quando atualizar o RKE2 pelo Rancher, revise a tag correspondente nos dois arquivos, confirme que ela existe no registry e publique com uma nova `version`, numa janela de manutenção. Não use `latest`.
 
-A reutilização da conta existente foi publicada na rodada `mpba-update-06`. O Fleet entrega três recursos (dois Plans e um Secret), e os cinco objetos de RBAC/ServiceAccount dedicados foram removidos. A revisão `mpba-update-07` acrescenta o prepare nos dois grupos e logs detalhados, mantendo essa estrutura.
+Essa é a imagem de ferramentas de upgrade do RKE2, não a imagem do kube-apiserver. O `command` dos Plans executa nossos scripts de SO em vez do upgrade do RKE2. O script verifica a compatibilidade do kubectl com a API (no máximo uma versão minor de diferença), além das ferramentas necessárias. A correspondência de tag deve ser revista após cada upgrade do cluster; não é uma garantia para toda versão futura. Sem digest, o conteúdo depende da tag publicada no registry.
 
-## Como acompanhar cada etapa
+## Seleção e descoberta dos nós
 
-1. **prepare:** primeiro aguarda os masters, se for um worker; depois verifica API, todos os nós esperados, Ready/pressão, heartbeats recentes, workloads e Longhorn quando existente. Exige 60 segundos contínuos de saúde. Não altera o host.
-2. **upgrade / DRAIN:** adquire a trava global, repete as verificações, faz cordon, verifica volumes e executa drain respeitando PDBs. O drain fica dentro do script para não ser repetido pelo SUC após o reboot.
-3. **upgrade / SO:** registra o backup etcd nos masters e a execução do transactional-update. A transação roda no systemd do host e seu progresso aparece também no log do container. Sem alterações, registra explicitamente que não reiniciará.
-4. **upgrade / VALIDAÇÃO:** se houve reboot, confere boot ID e snapshot; espera RKE2 ativo, libera o agendamento, espera workloads/volumes saudáveis por 60 segundos e só então libera o próximo nó.
+Não há nomes de hosts nos Plans. O Kubernetes fornece os nomes e labels pela API:
 
-`Init:0/1` informa que o prepare ainda não concluiu. Leia o log de **prepare** para saber se ele espera os masters ou a saúde do cluster. As mensagens incluem motivo, progresso e tempo restante; erro/timeout é informado e bloqueia o avanço.
+- Server: Linux com `node-role.kubernetes.io/control-plane`.
+- Worker: Linux sem `node-role.kubernetes.io/control-plane` e sem `node-role.kubernetes.io/etcd`.
+- A saúde considera todos os nós encontrados, inclusive os do outro grupo. A lista fica fixa durante o Job e é gravada na trava para sobreviver a reboot. Se a lista mudar durante esse Job, o avanço bloqueia.
 
-Um reboot do host pode deixar o pod anterior como `Unknown`/`Failed`. O Kubernetes cria outro pod do **mesmo Job** para retomar a validação. Isso não significa nova transação do SO. Só considere recuperado após o pod sucessor concluir, o Plan avançar e o nó voltar saudável. Os Jobs concluídos e seus pods são limpos pelo TTL configurado no controller (900 segundos no MPBA); não remova pods em execução apenas para limpar a tela.
+O exemplo destina-se ao cluster Linux com control-plane e etcd juntos, como o MPBA. Um nó somente etcd bloqueia para revisão da ordem; não é tratado como worker. A descoberta não identifica um nó removido da API antes de a rodada começar: confira a topologia esperada no Rancher antes de publicar.
 
-```bash
-# Identifique NODE, STATUS e Job; não deduza o nó apenas pelo status.
-kubectl -n cattle-system get pods -l upgrade.cattle.io/plan -o wide
+Um nó Linux novo passa a ser selecionado automaticamente. Antes de incluí-lo em uma rodada de update, ele precisa da preparação dos agendamentos descrita abaixo. Não é necessário atualizar uma lista de nomes.
 
-# Substitua pelo nome completo obtido acima.
-pod_suc=NOME_DO_POD
-kubectl -n cattle-system get pod "$pod_suc" \
-  -o jsonpath='{.spec.nodeName}{" Job="}{.metadata.ownerReferences[0].name}{"\n"}'
-kubectl -n cattle-system logs "$pod_suc" -c prepare -f
-# Após o prepare terminar, acompanhe o container upgrade.
-kubectl -n cattle-system logs "$pod_suc" -c upgrade -f
-```
+## O que acontece em cada etapa
 
-Exemplos do formato das mensagens (ilustrativos):
+1. **prepare:** descobre os nós; nos workers, espera todos os servers na mesma version/hash. Confere API, Ready, ausência de pressão/cordon, heartbeats recentes, workloads e Longhorn quando presente. Exige 60 segundos contínuos de saúde. Não altera o host.
+2. **upgrade / trava:** reserva a manutenção global para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, repete a saúde e bloqueia outros Jobs de manutenção conflitantes.
+3. **upgrade / drain:** faz cordon, verifica volumes e evacua workloads respeitando PDBs. Não usa force nem remove finalizers. O drain está no script para não ser repetido automaticamente após reboot.
+4. **upgrade / SO:** salva snapshot etcd nos servers e executa a transação no systemd do host. A saída aparece no log do container e fica persistida no host. Sem alterações, não há reboot.
+5. **upgrade / validação:** quando houve reboot, confere boot ID e snapshot ativo. Espera RKE2 ativo, faz uncordon, aguarda recuperação dos workloads/volumes por 60 segundos e só então libera a trava.
 
-```text
-container=prepare [ESPERA DOS SERVERS] versao=mpba-update-07 concluidos=2/3 em_execucao=master-mpba2 pendentes=master-mpba2
-container=prepare [ESPERA] Motivo: workloads ainda sem todas as replicas prontas. Restam 1700s.
-[WORKLOAD] Deployment cattle-system/cattle-cluster-agent prontas=1 desejadas=2
-container=upgrade [DRAIN] Evacuando workloads com eviction/PDB. Limite=30m.
-[HOST] [SO] Executando transactional-update --non-interactive --drop-if-no-change up
-container=upgrade [CONCLUIDO] Sem atualizacoes: SO NAO reiniciado. Saude confirmada; proximo no liberado.
-```
+`Init:0/1` significa que o prepare está em execução. Seus logs mostram o motivo, os servers pendentes, o progresso e o tempo restante. No reboot, o pod original pode ficar Unknown/Failed e outro pod do **mesmo Job** retoma a validação; isso não repete a transação. O TTL do controller limpa Jobs concluídos e seus pods (900 segundos no MPBA). Não apague pods ativos apenas para limpar a tela.
 
-O host mantém a saída da transação em `/var/lib/suc-os/HASH/operation.log`, além do journal. Após reboot, o pod sucessor reapresenta esse histórico e continua a validação. `systemd-run --no-block` permite acompanhar essa saída enquanto a unidade executa; a conclusão continua dependendo do estado persistido e das verificações, nunca apenas do envio do comando.
-
-## O que normalmente alterar
+## Parâmetros dos YAMLs
 
 | Parâmetro | Função |
 |---|---|
-| `spec.version` nos dois Plans | Identificador da rodada. É o único ajuste habitual. |
-| `nodeSelector` | Destinos de cada grupo; exige suc-os.cattle.io/enabled=true. |
-| `EXPECTED_NODES` | Todos os cinco nós esperados; não apenas o grupo atual. |
-| `SERVER_PLAN` / `SERVER_NODES` | Plan e nomes dos três masters que os workers devem esperar. |
-| `concurrency: 1` | Um nó por vez em cada grupo; a espera entre grupos e a trava compartilhada mantêm a fila serial. |
-| `PEER_PLAN` | Identifica o outro Plan desta manutenção. Seu Job pode estar apenas aguardando; outros Plans ativos bloqueiam. |
-| `PROFILE` | micro62 para SUSE Linux Micro; sles somente no exemplo de SLES tradicional. |
-| `ACTION` | update no uso normal; prepare-host prepara os agendamentos uma única vez. |
-| `MANAGE_AUTOMATIC` | Autoriza desativar timer/rebootmgr na preparação; transactional-update continua disponível. |
-| `ACTIVATE_PENDING` | Permite ativar um snapshot já pendente antes de tentar outra transação. |
-| `HEALTH_TIMEOUT` / `STABLE_SECONDS` | Até 1800 s para recuperar; exige 60 s contínuos de saúde. |
-| `DRAIN_TIMEOUT` / `HOST_TIMEOUT` | Até 30 min para drain e 7200 s para a operação no host. |
-| `WAIT_TIMEOUT` | Até 43200 s aguardando todos os masters, antes da manutenção do worker. |
-| `jobActiveDeadlineSecs` | Limite total do Job: 18000 s nos masters; 86400 s nos workers, incluindo a espera pelos masters. |
-| `postCompleteDelay: 30s` | Intervalo adicional após cada sucesso. |
-| `prepare` | Container inicial de consulta: espera a ordem dos grupos e valida saúde; não faz drain nem update. |
-| `upgrade.image` | Imagem fixa por digest. O comando executa nossos scripts, não um upgrade do RKE2. |
-| `serviceAccountName` | Reutiliza `system-upgrade-controller` em cattle-system. A conta e suas permissões são pré-requisitos; não são gerenciadas por estes YAMLs. |
-| `securityContext` | Executa como root e com privilégio necessário para operar o host. |
+| `version` | Identificador único da rodada; único ajuste habitual, igual nos dois Plans. |
+| `concurrency: 1` | Um nó por vez dentro de cada Plan. Espera dos servers + trava global impedem manutenção simultânea entre grupos. |
+| `exclusive: true` | Exclusividade por nó; não é uma trava global entre Plans. |
+| `jobActiveDeadlineSecs` | Limite total do Job: 18000 s nos servers; 86400 s nos workers, incluindo a espera inicial. |
+| `postCompleteDelay: 30s` | Intervalo adicional depois de cada sucesso. |
+| `serviceAccountName` | Conta existente usada para consultar e operar a API. |
+| `nodeSelector` / `tolerations` | Escolhem os papéis Linux e permitem execução em masters com taints e retomada após cordon. |
+| `prepare` / `upgrade` | Container inicial de validação e container que executa a manutenção. |
+| `image` / `command` / `args` | Imagem de ferramentas, interpretador Bash e script a executar. |
+| `securityContext` | Root e privilégio para o container upgrade operar o host montado em /host pelo SUC. |
 | `secrets` | Monta o código compartilhado em /run/suc-os. |
-| `tolerations` | Permitem executar nos masters e em nós cordoned. |
-| `PLAN_NAMESPACE` / `LH_NAMESPACE` | Namespace da manutenção e do Longhorn. |
-| `exclusive` | Exclusividade no nó; não substitui a espera entre os dois Plans. |
-| `upgrade.cattle.io/digest` | Acrescenta os campos listados ao hash. Versão, ServiceAccount e conteúdo dos Secrets já entram no cálculo do SUC; alterações podem disparar outra execução. |
+| `ACTION` | `update` na rotina; `prepare-host` somente para preparar os agendamentos. |
+| `PROFILE` | `micro62` exige SUSE Linux Micro 6.2; `sles` é o exemplo tradicional separado. |
+| `SERVER_PLAN` | Nome do Plan dos servers que o prepare do worker deve esperar. |
+| `PEER_PLAN` | Plan parceiro permitido; outros Jobs SUC ativos bloqueiam. |
+| `upgrade.cattle.io/digest` | Acrescenta imagem/envs/prepare ao cálculo de execução. Version, conta e conteúdo do Secret já entram no hash padrão. |
+| `defaultNamespace` / `helm.releaseName` | Namespace e identificação interna do release Fleet; não exigem Chart.yaml ou values. |
 
-Os hosts MPBA já foram preparados. SUC permanece ativo e o Plan de system-agent deve continuar com label disabled nos cinco nós. Para outro ambiente, revisar destinos, imagem, registro SUSE, backup e política de volumes antes da primeira preparação.
+A mudança da `version` dispara uma execução mesmo mantendo imagem e Secret iguais. **Mudanças de scripts, imagem, conta ou parâmetros também podem disparar execução.** Publique-as com uma nova version, igual nos dois Plans, somente depois de concluir a rodada anterior.
 
-## Proteções mantidas
+## Scripts legíveis no Secret
 
-- API, nós Ready/sem pressão, leases recentes e workloads saudáveis antes de avançar.
-- Snapshot etcd antes de cada master; snapshot local não substitui backup externo.
-- Drain com eviction e PDB. Nenhum force, remoção de PDB ou de finalizer.
-- Longhorn é opcional: sem grupo/volumes na API, não exige réplicas; falha de consulta bloqueia. Com volumes, espera redundância e réplicas RW.
-- PVC local, hostPath de aplicação e CSI desconhecido bloqueiam. Exceções de infraestrutura ficam na política.
-- `allowEmptyDirDeletion: true` na política foi autorizado apenas para os dados temporários deste lab; use false em outro ambiente sem essa autorização.
-- Sem novidades, transactional-update descarta o snapshot vazio e registra que não haverá reboot.
-- Reboot só é aceito após mudança real de boot ID e ativação do root Btrfs esperado.
-- Erro preserva a trava e os dados em /var/lib/suc-os/HASH. Nenhum próximo nó é autorizado pela passagem do tempo.
+`stringData` contém texto normal; a conversão interna em `data`/base64 é feita pelo Kubernetes. Base64 não é criptografia. O Secret foi mantido porque o SUC monta scripts por esse mecanismo; não há credenciais nele. Não precisa extrair, decodificar ou regenerar nada para editar.
 
-Em erro, leia os logs e `kubectl -n cattle-system get cm suc-os-maintenance-gate -o yaml`. No host envolvido, consulte `journalctl -u suc-os-HASH.service` e `/var/lib/suc-os/HASH/error`. Corrija a causa e confirme que não há update/reboot ativo antes de recuperar o nó e liberar a trava; não apague a trava para pular uma falha.
+| Chave | O que faz |
+|---|---|
+| `prepare.sh` | Organiza verificações iniciais e reconhece retomada após reboot. |
+| `run.sh` | Organiza a manutenção e acompanha o processo do host. |
+| `common.sh` | Logs, API, descoberta de nós, trava e valores padrão. |
+| `wait-servers.sh` | Espera a conclusão da mesma rodada em todos os servers. |
+| `health.sh` | Valida nós, heartbeats, workloads e Longhorn opcional. |
+| `host-preflight.sh` | Confere SO, ferramentas, systemd e pelo menos 2 GiB livres em / e /var. |
+| `host-worker.sh` | Executa o update e persiste resultado/estado antes do reboot. |
+| `storage-guard.jq` / `policy.json` | Verificam os volumes e as exceções autorizadas. |
 
-## Código do Secret
+Em Bash, `#` inicia comentário, `source` carrega funções de outro script e `${VAR:-padrao}` usa o padrão quando a variável não foi definida. `set -Eeuo pipefail` faz o fluxo parar em falhas/variáveis obrigatórias ausentes; `trap` registra a interrupção. Não é necessário mudar essas instruções no uso normal.
 
-A separação em vários arquivos de desenvolvimento foi retirada. O código fica no próprio Secret, em `data`/base64, para preservar a compatibilidade com server-side apply do Fleet. Para ler um script, sem aplicar nada:
+Os padrões avançados estão comentados no começo de `common.sh`:
+
+| Variável | Padrão e função |
+|---|---|
+| `PLAN_NAMESPACE` | Descoberto pela credencial projetada da ServiceAccount. |
+| `LH_NAMESPACE` | `longhorn-system`; ajuste apenas se o Longhorn estiver em outro namespace. |
+| `HEALTH_TIMEOUT` / `STABLE_SECONDS` | Até 1800 s esperando saúde; exige 60 s contínuos saudáveis. |
+| `DRAIN_TIMEOUT` / `HOST_TIMEOUT` | 30 min para drain e 7200 s para a transação no host. |
+| `WAIT_TIMEOUT` | Até 43200 s aguardando os servers. |
+| `ACTIVATE_PENDING` | `true`: ativa snapshot Micro pendente após drain; uma nova transação fica para a próxima rodada. |
+| `MANAGE_AUTOMATIC` | `true`, usado apenas em prepare-host para desativar timer/rebootmgr. |
+
+`NODE`, `PLAN`, `HASH` e a version são fornecidos pelo SUC ao Job. `EXPECTED_NODES` e `SERVER_NODES` vêm da descoberta na API; não são parâmetros para preencher. `STATE` guarda o resultado em `/var/lib/suc-os/HASH` no host. A trava `suc-os-maintenance-gate` não expira automaticamente: uma falha não autoriza o próximo nó.
+
+## Preparação inicial e volumes
+
+Os cinco nós MPBA já foram preparados: timers automáticos desativados, SUC ativo e system-agent-upgrader mantido em espera, conforme autorizado. `transactional-update` continua funcionando normalmente quando chamado pelo procedimento.
+
+Para preparar outro cluster/nós novos: confira primeiro SO, registro/repositórios SUSE, backup, imagem, conta e política de volumes. Use `ACTION: prepare-host` nos dois Plans com uma nova version igual, publique e espere ambos concluírem. Isso verifica/desativa `transactional-update.timer` e `rebootmgr.service`, sem executar update ou reboot. Depois volte ACTION para update com outra version. Não execute preparação enquanto outro update estiver ativo. Os novos nós precisam também da revisão de outros Plans/agendamentos conflitantes.
+
+Longhorn é opcional. Sem API/volumes Longhorn, a validação segue com PDBs e proteção dos demais volumes. Erro de consulta/permissão bloqueia; não é interpretado como ausência. Com Longhorn, exige saúde/redundância e protege a última réplica; espera reconstruções antes de avançar.
+
+PVC local, hostPath de aplicação e CSI não revisado bloqueiam antes do drain. Isso exige avaliar o backend e o workload, não apagar volume/finalizer. Em `policy.json`, `allowEmptyDirDeletion: true` foi autorizado apenas para dados temporários deste lab; use false sem essa autorização. `hostPathAllowlist` contém exceções específicas de infraestrutura; `remoteCSIDrivers` aceita apenas backends remotos previamente revisados. PDBs, falha de saúde, espaço, repositório ou compatibilidade também podem bloquear: o bloqueio não significa necessariamente corrupção de dados.
+
+## Diagnóstico opcional por terminal
+
+A rotina pode ser acompanhada no Rancher. Para quem preferir terminal, usando o kubeconfig do MPBA:
 
 ```bash
-kubectl create --dry-run=client -f plano/os-upgrade-secret.yaml -o json |
-  jq -r '.data["run.sh"]' | base64 -d
+kubectl -n cattle-system get plans
+kubectl -n cattle-system get pods -l upgrade.cattle.io/plan -o wide
+kubectl get nodes
+kubectl -n cattle-system get cm suc-os-maintenance-gate --ignore-not-found
+# Substitua NOME_DO_POD pelo nome mostrado acima.
+kubectl -n cattle-system logs NOME_DO_POD -c prepare -f
+kubectl -n cattle-system logs NOME_DO_POD -c upgrade -f
 ```
 
-Na política, `allowEmptyDirDeletion` autoriza o descarte de dados temporários; `hostPathAllowlist` exige correspondência de namespace, ServiceAccount, tipo de owner e caminho para cada exceção de infraestrutura; `remoteCSIDrivers` lista drivers remotos revisados além de Longhorn (NFS também é reconhecido). A lista de drivers está vazia por padrão: não adicione um backend sem revisar sua operação durante drain.
+Em erro, leia a mensagem `[ERRO]`/`[ACAO NECESSARIA]`, a trava e, no host envolvido, `journalctl -u suc-os-HASH.service` e `/var/lib/suc-os/HASH/operation.log`. Corrija a causa; confirme que não há transação/reboot ativo e que o nó/volumes estão recuperados antes de qualquer liberação manual. Não apague a trava para pular uma falha. Snapshot local etcd não substitui backup externo.
 
-Chaves: prepare.sh (verificações iniciais), run.sh (fluxo), common.sh (API/log/trava), wait-servers.sh (ordem dos grupos), health.sh (saúde), host-preflight.sh (SO/ferramentas), host-worker.sh (transação/reboot), storage-guard.jq e policy.json (volumes).
+## Exemplo SLES e validação
 
-Para editar código/política, extraia as chaves para uma pasta temporária vazia, edite e regenere usando o próprio kubectl; não é necessário manter um gerador no projeto:
+`examples/sles/plano-prod-so.yaml` é um exemplo alternativo de SLES tradicional com zypper. Usa o mesmo Secret/conta e está fora do caminho Fleet MPBA. Não o aplique junto dos Plans Micro no mesmo cluster. Começa em prepare-host; depois da preparação, use update com nova version. Não foi executado em host SLES tradicional real.
 
-```bash
-suc_fontes=$(mktemp -d)
-kubectl create --dry-run=client -f plano/os-upgrade-secret.yaml -o json |
-  jq -r '.data | to_entries[] | [.key, .value] | @tsv' |
-  while IFS=$'\t' read -r nome conteudo; do
-    printf '%s' "$conteudo" | base64 -d > "$suc_fontes/$nome"
-  done
-# Edite os arquivos em "$suc_fontes" e valide antes de gerar/publicar.
-kubectl create secret generic os-maintenance-shared-scripts -n cattle-system \
-  --from-file="$suc_fontes" --dry-run=client -o yaml > plano/os-upgrade-secret.yaml
-```
+A rodada mpba-update-06 concluiu em 18/10/2026: os cinco nós instalaram atualizações e reiniciaram, passando ao kernel `6.12.0-160000.39-default`. Dois Plans Complete, nós Ready/sem cordon, Longhorn com duas réplicas RW por volume, Prometheus e RabbitMQ respondendo. A coleta de 15 segundos registrou no máximo um nó cordoned e um container upgrade em execução; os workers começaram após os servers.
 
-## Validação e referências
+A revisão legível foi validada localmente com testes de descoberta, ordem, volumes, falhas de transação e retomada. Os cenários sem Longhorn e com volumes locais são simulados; o cluster real usa Longhorn. A execução desta revisão pelo Fleet será registrada após concluir o teste no cluster.
 
-A rodada **mpba-update-06 concluiu em 18/10/2026** usando `cattle-system/system-upgrade-controller` nos cinco nós. Todos instalaram atualizações do SO e reiniciaram, com mudança real de boot ID e kernel ativo `6.12.0-160000.39-default`. A coleta registrou no máximo um nó cordoned e um container upgrade em execução por vez; os workers só começaram após os três masters. Ao final: dois Plans Complete=True, cinco nós Ready/sem cordon, trava removida, Fleet com 3/3 recursos prontos, volumes Longhorn saudáveis com duas réplicas RW cada, Prometheus Ready e RabbitMQ respondendo. SUC permaneceu ativo, system-agent-upgrader em espera e os cinco objetos de SA/RBAC dedicados estavam removidos. Cada reboot interrompeu o pod original e gerou um pod sucessor do mesmo Job, que concluiu a validação; não houve repetição da transação.
-
-A revisão de prepare/logs passou em 32 testes Python (incluindo nove cenários de ordem entre grupos), verificações Bash de saúde/Longhorn/RKE2, sintaxe dos scripts e dry-run server-side dos dois Plans e Secret. Foram exercitados falha de transação, retomada após reboot, início assíncrono da unidade, ausência de reboot efetivo, snapshot divergente e reprodução incremental dos logs. A execução real desta revisão deve ser confirmada pelos resultados da rodada 07; dry-run não executa manutenção.
-
-A revisão simplificada passou em 26 testes anteriores, nove cenários da espera server/agent, sintaxe Bash e dry-run da API. A rodada mpba-update-05 validou os dois Plans no cluster: três masters primeiro e dois workers depois, com no máximo um container de manutenção ativo e um nó cordoned por vez. Todos executaram transactional-update; não havia pacotes novos e nenhum reiniciou. Ao final, ambos os Plans estavam Complete=True, os cinco nós Ready/sem cordon, sem trava pendente, os dois volumes Longhorn saudáveis com duas réplicas RW e Prometheus/RabbitMQ respondendo. O controller permaneceu ativo e o system-agent-upgrader em espera. Os cenários sem Longhorn e com volumes locais foram validados por testes simulados; o exemplo SLES tradicional não foi executado em host real. Os testes reais das rodadas 03/04 usaram a versão anterior com um Plan; o [relatório permanece no histórico Git](https://github.com/kaioneuhauss/SUC-DS/blob/bba41acf88718051495fdcbab27bd08dc6ade12d/docs/VALIDACAO.md). Não houve novos pacotes nas chamadas de transactional-update anteriores; houve ativação de snapshots pendentes e reboots reais.
-
-Referências: [SUC Plan](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/doc/plan.md), [SUSE Micro](https://documentation.suse.com/sle-micro/6.2/html/Micro-transactional-updates/index.html), [drain Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/), [Longhorn 1.11.2](https://longhorn.io/docs/1.11.2/maintenance/maintenance/) e [Fleet YAML](https://fleet.rancher.io/explanations/gitrepo-content). [Jobs Kubernetes](https://kubernetes.io/docs/concepts/workloads/controllers/job/) e [systemd-run](https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html). Scripts próprios; não representam homologação formal da SUSE.
+Referências: [SUC 0.19.1](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/doc/plan.md), [RKE2 upgrades](https://docs.rke2.io/upgrades/automated), [SUSE Micro 6.2](https://documentation.suse.com/sle-micro/6.2/html/Micro-transactional-updates/index.html), [drain Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/), [Secrets/stringData](https://kubernetes.io/docs/concepts/configuration/secret/), [Longhorn 1.11.2](https://longhorn.io/docs/1.11.2/maintenance/maintenance/) e [Fleet YAML](https://fleet.rancher.io/explanations/gitrepo-content). Scripts próprios, sem homologação formal da SUSE.
