@@ -19,7 +19,7 @@ spec:
   # UNICA ALTERACAO HABITUAL: novo identificador para este unico Plan.
   # Exemplo futuro: sles-20261019-01. Isso dispara updates disponiveis no repositorio;
   # nao seleciona uma release do SO. Espere a rodada anterior terminar.
-  version: opensuse-20261018-01
+  version: opensuse-20261018-02
 
   nodeSelector:
     matchLabels:
