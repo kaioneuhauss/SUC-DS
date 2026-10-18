@@ -59,7 +59,7 @@ Um nó Linux novo passa a ser selecionado automaticamente. Antes de incluí-lo e
 4. **upgrade / SO:** salva snapshot etcd nos servers e executa a transação no systemd do host. A saída aparece no log do container e fica persistida no host. Sem alterações, não há reboot.
 5. **upgrade / validação:** quando houve reboot, confere boot ID e snapshot ativo. Espera RKE2 ativo, faz uncordon, aguarda recuperação dos workloads/volumes por 60 segundos e só então libera a trava.
 
-Os logs agrupam o fluxo em **ETAPAS 1/6 a 6/6**. O nó, a rodada e o container aparecem no início, sem repetir um prefixo longo em cada linha. Na espera, o resumo muda quando há progresso; sem mudança, há apenas um lembrete a cada dois minutos.
+Os logs agrupam o fluxo em **ETAPAS 1/6 a 6/6**: azul em negrito para etapas/informações, verde para sucesso, amarelo para espera/atenção e vermelho em negrito para erro/interrupção. As cores usam ANSI; os rótulos continuam informativos sem cor. Para um exportador sem ANSI, use LOG_COLOR=false ou NO_COLOR=1 no container. O nó, a rodada e o container aparecem no início, sem repetir um prefixo longo em cada linha. Na espera, o resumo muda quando há progresso; sem mudança, há apenas um lembrete a cada dois minutos.
 
 ```text
 ========== ETAPA 1/6 - IDENTIFICAR NOS E CONFIRMAR A ORDEM ==========
