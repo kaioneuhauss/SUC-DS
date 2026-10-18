@@ -1,0 +1,5 @@
+# YAMLs simples; Fleet empacota os recursos e entrega ao cluster Rancher.
+# O GitRepo deve selecionar apenas opensuse-sles/ e o cluster local.
+defaultNamespace: cattle-system
+helm:
+  releaseName: suc-os-rancher
