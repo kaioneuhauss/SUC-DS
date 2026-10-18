@@ -1,7 +1,8 @@
-# Identidade existente do bundle; preserva os recursos ao renomear o diretorio.
-name: suc-os-mpba-plano
+# Identificadores genericos para a instalacao do perfil SLE Micro.
+# Em instalacoes existentes, revisar a migracao antes de alterar estes nomes.
+name: suc-os-sle-micro
 defaultNamespace: cattle-system
-# YAML puro. Este nome permite ao Fleet reutilizar o registro do release inicial.
+# YAML puro. Fleet usa este nome internamente para o release.
 # Nao ha Chart.yaml, templates nem values para manter.
 helm:
-  releaseName: suc-os-mpba
+  releaseName: suc-os-sle-micro
