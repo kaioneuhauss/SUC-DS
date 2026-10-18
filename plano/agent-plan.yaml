@@ -12,8 +12,8 @@ spec:
   exclusive: true
   jobActiveDeadlineSecs: 86400
   postCompleteDelay: 30s
-  serviceAccountName: os-maintenance
-  version: mpba-update-05
+  serviceAccountName: system-upgrade-controller
+  version: mpba-update-06
   nodeSelector:
     matchLabels:
       kubernetes.io/os: linux

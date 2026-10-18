@@ -1,5 +1,5 @@
 # Edite spec.version nos DOIS Plans com o mesmo identificador de rodada.
-# Servers primeiro; permissoes compartilhadas ficam depois do Plan neste arquivo.
+# Reutiliza a ServiceAccount system-upgrade-controller existente em cattle-system.
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
 metadata:
@@ -12,8 +12,8 @@ spec:
   exclusive: true
   jobActiveDeadlineSecs: 18000
   postCompleteDelay: 30s
-  serviceAccountName: os-maintenance
-  version: mpba-update-05
+  serviceAccountName: system-upgrade-controller
+  version: mpba-update-06
   nodeSelector:
     matchLabels:
       kubernetes.io/os: linux
@@ -64,142 +64,3 @@ spec:
       value: 'true'
     - name: PEER_PLAN
       value: os-maintenance-agent
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: os-maintenance
-  namespace: cattle-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: cattle-system-os-maintenance
-rules:
-- apiGroups:
-  - ''
-  resources:
-  - nodes
-  verbs:
-  - get
-  - list
-  - patch
-- apiGroups:
-  - ''
-  resources:
-  - pods
-  - persistentvolumes
-  - persistentvolumeclaims
-  verbs:
-  - get
-  - list
-- apiGroups:
-  - ''
-  resources:
-  - pods/eviction
-  verbs:
-  - create
-- apiGroups:
-  - policy
-  resources:
-  - poddisruptionbudgets
-  verbs:
-  - get
-  - list
-- apiGroups:
-  - apps
-  resources:
-  - deployments
-  - statefulsets
-  - daemonsets
-  verbs:
-  - get
-  - list
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - get
-  - list
-- apiGroups:
-  - batch
-  resources:
-  - jobs
-  verbs:
-  - get
-  - list
-- apiGroups:
-  - upgrade.cattle.io
-  resources:
-  - plans
-  verbs:
-  - get
-  - list
-- apiGroups:
-  - longhorn.io
-  resources:
-  - settings
-  - volumes
-  - nodes
-  - engines
-  - replicas
-  verbs:
-  - get
-  - list
-- nonResourceURLs:
-  - /readyz
-  - /readyz/*
-  - /version
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: cattle-system-os-maintenance
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cattle-system-os-maintenance
-subjects:
-- kind: ServiceAccount
-  name: os-maintenance
-  namespace: cattle-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: os-maintenance-gate
-  namespace: cattle-system
-rules:
-- apiGroups:
-  - ''
-  resources:
-  - configmaps
-  verbs:
-  - create
-- apiGroups:
-  - ''
-  resources:
-  - configmaps
-  resourceNames:
-  - suc-os-maintenance-gate
-  verbs:
-  - get
-  - patch
-  - delete
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: os-maintenance-gate
-  namespace: cattle-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: os-maintenance-gate
-subjects:
-- kind: ServiceAccount
-  name: os-maintenance
-  namespace: cattle-system
