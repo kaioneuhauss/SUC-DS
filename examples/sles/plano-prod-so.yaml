@@ -1,81 +1,58 @@
-# Exemplo alternativo para SLES tradicional; nao e incluido pelo Fleet do MPBA.
-# Usa o mesmo Secret e a ServiceAccount system-upgrade-controller existente em cattle-system.
-# Revisar os nomes e confirmar as permissoes dessa conta antes de aplicar.
+# Exemplo ALTERNATIVO para SLES tradicional; nao aplicar em SUSE Linux Micro.
+# Nao e entregue pelo GitRepo MPBA, que acompanha somente plano/.
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
 metadata:
   name: os-maintenance-sles
   namespace: cattle-system
   annotations:
+    # Tambem recalcular a execucao se imagem, parametros ou prepare mudarem.
+    # A version e o conteudo do Secret ja entram no hash padrao do SUC.
     upgrade.cattle.io/digest: spec.upgrade.envs,spec.upgrade.image,spec.prepare
 spec:
+  # Um no por vez neste Plan. A espera dos servers e a trava unem os dois grupos.
   concurrency: 1
-  exclusive: true
-  jobActiveDeadlineSecs: 18000
-  postCompleteDelay: 30s
-  serviceAccountName: system-upgrade-controller
+  exclusive: true                 # Evita outro Plan exclusivo no mesmo no.
+  jobActiveDeadlineSecs: 18000  # Limite total do Job, em segundos.
+  postCompleteDelay: 30s          # Pausa adicional antes do proximo no.
+  serviceAccountName: system-upgrade-controller  # Conta existente do SUC.
+
+  # UNICA ALTERACAO HABITUAL: novo identificador para este Plan alternativo.
+  # Exemplo futuro: sles-20261019-01. Isso dispara updates disponiveis no repositorio;
+  # nao seleciona uma release do SO. Espere a rodada anterior terminar.
   version: sles-prepare-01
+
   nodeSelector:
     matchLabels:
       kubernetes.io/os: linux
-      suc-os.cattle.io/enabled: 'true'
-    matchExpressions:
-    - key: kubernetes.io/hostname
-      operator: In
-      values:
-      - sles-node1
-      - sles-node2
   tolerations:
-  - operator: Exists
+    - operator: Exists            # Permite masters com taints e retomada apos cordon.
   secrets:
-  - name: os-maintenance-shared-scripts
-    path: /run/suc-os
+    - name: os-maintenance-shared-scripts
+      path: /run/suc-os            # Scripts legiveis definidos no Secret compartilhado.
+
   prepare:
-    image: registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1@sha256:ac50dbeabcb4e1e8a63dfe5715837e35b90f36f742568c9cf470a0adf4d95aef
-    command:
-    - /bin/bash
-    args:
-    - /run/suc-os/prepare.sh
-    envs:
-    - name: PLAN_NAMESPACE
-      value: cattle-system
-    - name: EXPECTED_NODES
-      value: sles-node1,sles-node2
-    - name: LH_NAMESPACE
-      value: longhorn-system
-    - name: HEALTH_TIMEOUT
-      value: '1800'
-    - name: STABLE_SECONDS
-      value: '60'
+    # Atualize esta tag quando atualizar o RKE2 do cluster. Ex.: v1.35.6+rke2r1
+    # vira v1.35.6-rke2r1. Esta imagem fornece bash/kubectl/jq para os scripts de SO.
+    # &maintenance_image nomeia a imagem; *maintenance_image abaixo reutiliza-a.
+    image: &maintenance_image registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1
+    command: [/bin/bash]
+    args: [/run/suc-os/prepare.sh]  # Mostra verificacoes e motivos de espera no log.
+
   upgrade:
-    image: registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1@sha256:ac50dbeabcb4e1e8a63dfe5715837e35b90f36f742568c9cf470a0adf4d95aef
-    command:
-    - /bin/bash
-    args:
-    - /run/suc-os/run.sh
+    image: *maintenance_image
+    command: [/bin/bash]
+    args: [/run/suc-os/run.sh]      # Trava -> saude -> drain -> SO -> validar/liberar.
     securityContext:
-      privileged: true
+      privileged: true            # Necessario para operar o SO via /host.
       runAsUser: 0
     envs:
-    - name: PLAN_NAMESPACE
-      value: cattle-system
-    - name: ACTION
-      value: prepare-host
-    - name: PROFILE
-      value: sles
-    - name: EXPECTED_NODES
-      value: sles-node1,sles-node2
-    - name: LH_NAMESPACE
-      value: longhorn-system
-    - name: HEALTH_TIMEOUT
-      value: '1800'
-    - name: STABLE_SECONDS
-      value: '60'
-    - name: DRAIN_TIMEOUT
-      value: 30m
-    - name: HOST_TIMEOUT
-      value: '7200'
-    - name: ACTIVATE_PENDING
-      value: 'false'
-    - name: MANAGE_AUTOMATIC
-      value: 'true'
+      # update = rotina; prepare-host = preparacao inicial dos agendamentos.
+      - name: ACTION
+        value: prepare-host
+      - name: PROFILE
+        value: sles               # Confere o SO antes de executar qualquer transacao.
+      - name: ACTIVATE_PENDING
+        value: 'false'            # SLES tradicional nao usa snapshots transacionais.
+    # Tempos, namespace Longhorn e demais padroes ficam comentados em common.sh,
+    # dentro do Secret. Nao e preciso editar scripts para disparar a proxima rodada.
