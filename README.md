@@ -59,6 +59,21 @@ Um nó Linux novo passa a ser selecionado automaticamente. Antes de incluí-lo e
 4. **upgrade / SO:** salva snapshot etcd nos servers e executa a transação no systemd do host. A saída aparece no log do container e fica persistida no host. Sem alterações, não há reboot.
 5. **upgrade / validação:** quando houve reboot, confere boot ID e snapshot ativo. Espera RKE2 ativo, faz uncordon, aguarda recuperação dos workloads/volumes por 60 segundos e só então libera a trava.
 
+Os logs agrupam o fluxo em **ETAPAS 1/6 a 6/6**. O nó, a rodada e o container aparecem no início, sem repetir um prefixo longo em cada linha. Na espera, o resumo muda quando há progresso; sem mudança, há apenas um lembrete a cada dois minutos.
+
+```text
+========== ETAPA 1/6 - IDENTIFICAR NOS E CONFIRMAR A ORDEM ==========
+[AGUARDANDO] Concluidos: 1 de 3. Em execucao: master-mpba2.
+Ainda faltam: master-mbpa1, master-mpba2.
+
+========== ETAPA 6/6 - RESULTADO FINAL ==========
+[CONCLUIDO] SUCESSO. Nao havia atualizacoes. SO NAO reiniciado. Saude OK; proximo no liberado.
+```
+
+Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquele Pod não executará novas etapas, e `[COMO CORRIGIR]` orienta o diagnóstico. Falha fatal no prepare tenta registrar a mesma trava global em failed, sem sobrescrever uma manutenção existente. O upgrade preserva a trava em failed. O SUC pode recriar o Pod, mas a trava impede que essa repetição pule a falha. Um worker também interrompe a espera se encontrar a trava em failed.
+
+**Interromper o procedimento não é desfazer pacotes já instalados nem matar uma transação ativa.** Se o systemd ainda estiver executando a transação, o log avisa para verificar seu resultado antes de qualquer recuperação. Isso evita interromper escrita de pacotes à força.
+
 `Init:0/1` significa que o prepare está em execução. Seus logs mostram o motivo, os servers pendentes, o progresso e o tempo restante. No reboot, o pod original pode ficar Unknown/Failed e outro pod do **mesmo Job** retoma a validação; isso não repete a transação. O TTL do controller limpa Jobs concluídos e seus pods (900 segundos no MPBA). Não apague pods ativos apenas para limpar a tela.
 
 ## Parâmetros dos YAMLs
