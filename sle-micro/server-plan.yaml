@@ -1,9 +1,8 @@
-# Exemplo ALTERNATIVO para SLES tradicional; nao aplicar em SUSE Linux Micro.
-# Nao e entregue pelo GitRepo MPBA, que acompanha somente plano/.
+# SUSE Linux Micro 6.2. Fleet aplica este Plan no cluster selecionado no GitRepo.
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
 metadata:
-  name: os-maintenance-sles
+  name: os-maintenance-server
   namespace: cattle-system
   annotations:
     # Tambem recalcular a execucao se imagem, parametros ou prepare mudarem.
@@ -17,14 +16,18 @@ spec:
   postCompleteDelay: 30s          # Pausa adicional antes do proximo no.
   serviceAccountName: system-upgrade-controller  # Conta existente do SUC.
 
-  # UNICA ALTERACAO HABITUAL: novo identificador para este Plan alternativo.
+  # UNICA ALTERACAO HABITUAL: novo identificador, igual nos DOIS Plans.
   # Exemplo futuro: sles-20261019-01. Isso dispara updates disponiveis no repositorio;
-  # nao seleciona uma release do SO. Espere a rodada anterior terminar.
-  version: sles-prepare-01
+  # nao seleciona uma release do SO. Publique ambos juntos e espere a rodada terminar.
+  version: sles-20261018-03
 
   nodeSelector:
     matchLabels:
       kubernetes.io/os: linux
+    # Label de funcao; os nomes dos servers sao descobertos automaticamente.
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
   tolerations:
     - operator: Exists            # Permite masters com taints e retomada apos cordon.
   secrets:
@@ -49,10 +52,10 @@ spec:
     envs:
       # update = rotina; prepare-host = preparacao inicial dos agendamentos.
       - name: ACTION
-        value: prepare-host
+        value: update
       - name: PROFILE
-        value: sles               # Confere o SO antes de executar qualquer transacao.
-      - name: ACTIVATE_PENDING
-        value: 'false'            # SLES tradicional nao usa snapshots transacionais.
+        value: micro62               # Perfil SLE Micro 6.2; bloqueia se o SO for diferente.
+      - name: PEER_PLAN
+        value: os-maintenance-agent  # Outro grupo desta manutencao.
     # Tempos, namespace Longhorn e demais padroes ficam comentados em common.sh,
     # dentro do Secret. Nao e preciso editar scripts para disparar a proxima rodada.
