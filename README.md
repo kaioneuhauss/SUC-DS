@@ -4,12 +4,14 @@ O uso normal é **alterar `version` e publicar no Git**. O Fleet entrega os YAML
 
 | Diretório | Sistema / cluster | Arquivos para operar |
 |---|---|---|
-| `sle-micro/` | **SLE Micro 6.2**, MPBA | `fleet.yaml`, `server-plan.yaml`, `agent-plan.yaml`, `os-upgrade-secret.yaml` |
+| `sle-micro/` | **SLE Micro 6.2**, cluster downstream | `fleet.yaml`, `server-plan.yaml`, `agent-plan.yaml`, `os-upgrade-secret.yaml` |
 | `opensuse-sles/` | **openSUSE Leap / SLES tradicional**, Rancher | `fleet.yaml`, `server-plan.yaml`, `os-upgrade-secret.yaml` |
 
 O exemplo tradicional anterior foi consolidado em `opensuse-sles/`: ficam apenas os dois diretórios de SO.
 
-Cada diretório é independente e tem seu próprio Secret. Configure o GitRepo com **apenas o caminho e o cluster correspondentes**; não aponte para a raiz do repositório nem aplique os dois perfis no mesmo cluster. O GitRepo do MPBA acompanha `sle-micro/`. O nome interno do bundle foi preservado para evitar recriar recursos durante a mudança de pasta. Não há chart próprio, gerador ou instalação de Python.
+Cada diretório é independente e tem seu próprio Secret. Configure o GitRepo com **apenas o caminho e o cluster correspondentes**; não aponte para a raiz do repositório nem aplique os dois perfis no mesmo cluster. O GitRepo do cluster SLE Micro deve acompanhar `sle-micro/`. Os identificadores do bundle e do release usam o nome genérico `suc-os-sle-micro`. Não há chart próprio, gerador ou instalação de Python.
+
+**Instalações existentes:** se o bundle ou o release já usa outro nome, planeje a migração antes de publicar estes identificadores genéricos. A troca de nomes não é uma alteração apenas visual e pode recriar recursos no Fleet. Comentários dentro de `stringData` também fazem parte do conteúdo do Secret e sua alteração pode disparar uma nova execução do SUC.
 
 Função dos arquivos:
 
@@ -20,7 +22,7 @@ Função dos arquivos:
 | `agent-plan.yaml` | Seleciona Linux sem control-plane/etcd; espera os servers da mesma rodada. |
 | `os-upgrade-secret.yaml` | Scripts e política em texto legível (`stringData`), sem credenciais. |
 
-Todos os Plans reutilizam a ServiceAccount `cattle-system/system-upgrade-controller`, já existente. Este projeto não cria Roles, bindings ou outra conta. No MPBA e no Rancher, essa conta já tem cluster-admin; os Jobs recebem essas permissões amplas. O SUC, a conta e as permissões são pré-requisitos para outro cluster.
+Todos os Plans reutilizam a ServiceAccount `cattle-system/system-upgrade-controller`, já existente. Este projeto não cria Roles, bindings ou outra conta. Nos clusters de laboratório, essa conta já tem cluster-admin; os Jobs recebem essas permissões amplas. O SUC, a conta e as permissões são pré-requisitos para outro cluster.
 
 ## Passo a passo: SLE Micro 6.2
 
@@ -30,7 +32,7 @@ Todos os Plans reutilizam a ServiceAccount `cattle-system/system-upgrade-control
    version: sles-20261019-01
    ```
 3. Coloque **exatamente o mesmo valor novo** em `sle-micro/agent-plan.yaml`. Use um identificador que nunca foi executado. `sles-20261019-01` é apenas um nome de rodada: não instala uma release específica do SO e não atualiza Kubernetes.
-4. Publique os dois arquivos juntos no `main` acompanhado pelo GitRepo `fleet-default/suc-os-mpba`. Pela interface do GitHub, edite ambos na mesma branch e integre o PR depois das duas alterações. Não faça dois commits separados diretamente em main durante uma rodada.
+4. Publique os dois arquivos juntos na branch `main` acompanhada pelo GitRepo configurado para o cluster SLE Micro. Pela interface do GitHub, edite ambos na mesma branch e integre o PR depois das duas alterações. Não faça dois commits separados diretamente em main durante uma rodada.
 5. No Rancher, abra os Pods do namespace `cattle-system`. Leia **prepare** para acompanhar espera/validações e depois **upgrade** para drain, atualização e resultado.
 6. Aguarde ambos os Plans Complete=True, nós Ready/sem cordon e ausência da trava `suc-os-maintenance-gate`. Só então inicie outra rodada.
 
@@ -62,7 +64,7 @@ image: &maintenance_image registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2
 
 Essa é a imagem de ferramentas de upgrade do RKE2, não a imagem do kube-apiserver. O `command` dos Plans executa nossos scripts de SO em vez do upgrade do RKE2. O script verifica a compatibilidade do kubectl com a API (no máximo uma versão minor de diferença), além das ferramentas necessárias. A correspondência de tag deve ser revista após cada upgrade do cluster; não é uma garantia para toda versão futura. Sem digest, o conteúdo depende da tag publicada no registry.
 
-No MPBA, o Micro 6.2 anuncia `SUSE Linux Enterprise Server 16.0` em `PRETTY_NAME` por compatibilidade. O perfil exige também `VARIANT_ID=transactional`, `SUSE_SUPPORT_PRODUCT=SUSE Linux Micro` e versão do produto `6.2` (ou o ID Micro equivalente). Por isso uma linha do host pode mostrar SLES 16.0 enquanto a ação identifica corretamente SLE Micro 6.2. O perfil tradicional rejeita esse host transacional.
+No laboratório SLE Micro 6.2, o sistema anuncia `SUSE Linux Enterprise Server 16.0` em `PRETTY_NAME` por compatibilidade. O perfil exige também `VARIANT_ID=transactional`, `SUSE_SUPPORT_PRODUCT=SUSE Linux Micro` e versão do produto `6.2` (ou o ID Micro equivalente). Por isso uma linha do host pode mostrar SLES 16.0 enquanto a ação identifica corretamente SLE Micro 6.2. O perfil tradicional rejeita esse host transacional.
 
 ## Seleção e descoberta dos nós
 
@@ -72,7 +74,7 @@ Não há nomes de hosts nos Plans. O Kubernetes fornece os nomes e labels pela A
 - Worker: Linux sem `node-role.kubernetes.io/control-plane` e sem `node-role.kubernetes.io/etcd`.
 - A saúde considera todos os nós encontrados, inclusive os do outro grupo. A lista fica fixa durante o Job e é gravada na trava para sobreviver a reboot. Se a lista mudar durante esse Job, o avanço bloqueia.
 
-O exemplo destina-se ao cluster Linux com control-plane e etcd juntos, como o MPBA. Um nó somente etcd bloqueia para revisão da ordem; não é tratado como worker. A descoberta não identifica um nó removido da API antes de a rodada começar: confira a topologia esperada no Rancher antes de publicar.
+O exemplo destina-se ao cluster Linux com control-plane e etcd juntos. Um nó somente etcd bloqueia para revisão da ordem; não é tratado como worker. A descoberta não identifica um nó removido da API antes de a rodada começar: confira a topologia esperada no Rancher antes de publicar.
 
 Um nó Linux novo passa a ser selecionado automaticamente. Antes de incluí-lo em uma rodada de update, ele precisa da preparação dos agendamentos descrita abaixo. Não é necessário atualizar uma lista de nomes.
 
@@ -88,8 +90,8 @@ Os logs agrupam o fluxo em **Etapa 1 de 6 até Etapa 6 de 6**: azul em negrito p
 
 ```text
 Etapa 1 de 6 — Preparar a atualização
-[AGUARDANDO] Servidores concluídos: 1 de 3. Em atualização: master-mpba2.
-Faltam: master-mbpa1, master-mpba2.
+[AGUARDANDO] Servidores concluídos: 1 de 3. Em atualização: server-02.
+Faltam: server-01, server-02.
 
 Etapa 6 de 6 — Concluir a manutenção deste nó
 [CONCLUIDO] Não havia atualizações disponíveis. Este nó não foi reiniciado. O cluster está saudável; o próximo nó já pode começar.
@@ -99,7 +101,7 @@ Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquel
 
 **Interromper o procedimento não é desfazer pacotes já instalados nem matar uma transação ativa.** Se o systemd ainda estiver executando a transação, o log avisa para verificar seu resultado antes de qualquer recuperação. Isso evita interromper escrita de pacotes à força.
 
-`Init:0/1` significa que o prepare está em execução. Seus logs mostram o motivo, os servers pendentes, o progresso e o tempo restante. No reboot, o pod original pode ficar Unknown/Failed e outro pod do **mesmo Job** retoma a validação; isso não repete a transação. O TTL do controller limpa Jobs concluídos e seus pods (900 segundos no MPBA). Não apague pods ativos apenas para limpar a tela.
+`Init:0/1` significa que o prepare está em execução. Seus logs mostram o motivo, os servers pendentes, o progresso e o tempo restante. No reboot, o pod original pode ficar Unknown/Failed e outro pod do **mesmo Job** retoma a validação; isso não repete a transação. O TTL do controller limpa Jobs concluídos e seus pods (900 segundos no laboratório SLE Micro). Não apague pods ativos apenas para limpar a tela.
 
 ## Parâmetros dos YAMLs
 
@@ -121,7 +123,7 @@ Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquel
 | `SERVER_PLAN` | Nome do Plan dos servers que o prepare do worker deve esperar. |
 | `PEER_PLAN` | Plan parceiro permitido; outros Jobs SUC ativos bloqueiam. |
 | `upgrade.cattle.io/digest` | Acrescenta imagem/envs/prepare ao cálculo de execução. Version, conta e conteúdo do Secret já entram no hash padrão. |
-| `name` no `sle-micro/fleet.yaml` | Preserva o bundle `suc-os-mpba-plano` existente ao mudar a pasta. Esse identificador interno não muda o caminho usado no GitRepo. |
+| `name` no `sle-micro/fleet.yaml` | Define o identificador genérico do bundle: `suc-os-sle-micro`. Não muda o caminho usado no GitRepo. |
 | `defaultNamespace` / `helm.releaseName` | Namespace e identificação interna do release Fleet; não exigem Chart.yaml ou values. |
 
 A mudança da `version` dispara uma execução mesmo mantendo imagem e Secret iguais. **Mudanças de scripts, imagem, conta ou parâmetros também podem disparar execução.** Publique-as com uma nova version, igual nos dois Plans, somente depois de concluir a rodada anterior.
@@ -159,21 +161,21 @@ Os padrões avançados estão comentados no começo de `common.sh`:
 
 ## Preparação inicial e volumes
 
-Os cinco nós MPBA já foram preparados: timers automáticos desativados, SUC ativo e system-agent-upgrader mantido em espera, conforme autorizado. `transactional-update` continua funcionando normalmente quando chamado pelo procedimento.
+Os cinco nós do laboratório SLE Micro já foram preparados: timers automáticos desativados, SUC ativo e system-agent-upgrader mantido em espera, conforme autorizado. `transactional-update` continua funcionando normalmente quando chamado pelo procedimento.
 
 Para preparar outro cluster/nós novos: confira primeiro SO, registro/repositórios SUSE, backup, imagem, conta e política de volumes. Use `ACTION: prepare-host` nos Plans do perfil selecionado, com uma nova version (igual nos dois Plans do Micro), publique e espere todos concluírem. Isso verifica/desativa `transactional-update.timer`, `os-update.timer` e `rebootmgr.service`, quando existem, sem executar update ou reboot. Depois volte ACTION para update com outra version. Não execute preparação enquanto outro update estiver ativo. Os novos nós precisam também da revisão de outros Plans/agendamentos conflitantes.
 
 Longhorn é opcional. Sem API/volumes Longhorn, a validação segue com PDBs e proteção dos demais volumes. Erro de consulta/permissão bloqueia; não é interpretado como ausência. Com Longhorn, exige saúde/redundância e protege a última réplica; espera reconstruções antes de avançar.
 
-PVC local, hostPath de aplicação e CSI não revisado bloqueiam antes do drain. Isso exige avaliar o backend e o workload, não apagar volume/finalizer. Em `policy.json`, `allowEmptyDirDeletion: true` foi autorizado para os dados temporários dos labs MPBA e Rancher, incluindo filas de telemetria do Rancher; use false sem essa autorização. `hostPathAllowlist` contém exceções específicas de infraestrutura (no Rancher, diretórios de certificados do controller SUC, identificados por namespace/ServiceAccount/owner/path); `remoteCSIDrivers` aceita apenas backends remotos previamente revisados. PDBs, falha de saúde, espaço, repositório ou compatibilidade também podem bloquear: o bloqueio não significa necessariamente corrupção de dados.
+PVC local, hostPath de aplicação e CSI não revisado bloqueiam antes do drain. Isso exige avaliar o backend e o workload, não apagar volume/finalizer. Em `policy.json`, `allowEmptyDirDeletion: true` foi autorizado para os dados temporários dos laboratórios SLE Micro e Rancher, incluindo filas de telemetria do Rancher; use false sem essa autorização. `hostPathAllowlist` contém exceções específicas de infraestrutura (no Rancher, diretórios de certificados do controller SUC, identificados por namespace/ServiceAccount/owner/path); `remoteCSIDrivers` aceita apenas backends remotos previamente revisados. PDBs, falha de saúde, espaço, repositório ou compatibilidade também podem bloquear: o bloqueio não significa necessariamente corrupção de dados.
 
 ### Ajuste de DNS encontrado durante o teste do lab
 
-No MPBA, os upstreams do host tinham respostas diferentes: `192.168.20.100` resolvia o FQDN Rancher e `192.168.20.1` devolvia resposta sem endereço. Isso deixou uma réplica do `cattle-cluster-agent` em CrashLoopBackOff e a checagem de saúde manteve a fila parada. Foi criado o `HelmChartConfig kube-system/rke2-coredns` no lab, encaminhando somente `rancher.neuhauss.com.br` para `192.168.20.100` e preservando a configuração das demais zonas. Esse é um ajuste de infraestrutura específico do lab, fora dos dois diretórios do SUC. Em outro ambiente, valide o DNS interno e sua redundância antes da manutenção; não copie esse IP automaticamente. [Customização pelo HelmChartConfig do RKE2](https://docs.rke2.io/helm/) e [encaminhamento por domínio do CoreDNS](https://coredns.io/plugins/forward/).
+No laboratório SLE Micro, os upstreams do host tinham respostas diferentes: `192.168.20.100` resolvia o FQDN Rancher e `192.168.20.1` devolvia resposta sem endereço. Isso deixou uma réplica do `cattle-cluster-agent` em CrashLoopBackOff e a checagem de saúde manteve a fila parada. Foi criado o `HelmChartConfig kube-system/rke2-coredns` no lab, encaminhando somente `rancher.neuhauss.com.br` para `192.168.20.100` e preservando a configuração das demais zonas. Esse é um ajuste de infraestrutura específico do lab, fora dos dois diretórios do SUC. Em outro ambiente, valide o DNS interno e sua redundância antes da manutenção; não copie esse IP automaticamente. [Customização pelo HelmChartConfig do RKE2](https://docs.rke2.io/helm/) e [encaminhamento por domínio do CoreDNS](https://coredns.io/plugins/forward/).
 
 ## Diagnóstico opcional por terminal
 
-A rotina pode ser acompanhada no Rancher. Para quem preferir terminal, usando o kubeconfig do MPBA:
+A rotina pode ser acompanhada no Rancher. Para quem preferir terminal, usando o kubeconfig do cluster de destino:
 
 ```bash
 kubectl -n cattle-system get plans
@@ -189,10 +191,10 @@ Em erro, leia a mensagem `[ERRO]`/`[ACAO NECESSARIA]`, a trava e, no host envolv
 
 ## Validação e limites
 
-- MPBA: a rodada `mpba-update-06` instalou atualizações e reiniciou os cinco nós, passando ao kernel `6.12.0-160000.39-default`.
-- MPBA: a rodada `mpba-update-07` executou o transactional-update nos cinco nós, sem pacotes novos e sem reboot. Plans concluídos, nós Ready, Longhorn saudável e aplicações respondendo.
-- MPBA: `sles-20261018-01` e `sles-20261018-02` concluíram nos cinco nós, sem pacotes novos/reboot. A segunda foi disparada alterando somente version; imagem e conteúdo do Secret permaneceram idênticos. Houve no máximo um nó com cordon e um container upgrade em execução. Prometheus, RabbitMQ e duas réplicas por volume Longhorn foram verificados após a rodada.
-- MPBA: a rodada final `sles-20261018-03` concluiu nos cinco nós com os novos textos e as pastas definitivas. Nenhum reboot, Plans completos, Longhorn com duas réplicas RW por volume, Prometheus e RabbitMQ respondendo. A fila aguardou a correção do DNS e a recuperação das réplicas, preservando no máximo um nó em manutenção. A migração para `sle-micro/` manteve os UIDs dos recursos e o Fleet ficou com 3/3 recursos prontos.
+- SLE Micro 6.2: a rodada inicial de atualização instalou atualizações e reiniciou os cinco nós, passando ao kernel `6.12.0-160000.39-default`.
+- SLE Micro 6.2: a rodada seguinte executou o transactional-update nos cinco nós, sem pacotes novos e sem reboot. Plans concluídos, nós Ready, Longhorn saudável e aplicações respondendo.
+- SLE Micro 6.2: `sles-20261018-01` e `sles-20261018-02` concluíram nos cinco nós, sem pacotes novos/reboot. A segunda foi disparada alterando somente version; imagem e conteúdo do Secret permaneceram idênticos. Houve no máximo um nó com cordon e um container upgrade em execução. Prometheus, RabbitMQ e duas réplicas por volume Longhorn foram verificados após a rodada.
+- SLE Micro 6.2: a rodada final `sles-20261018-03` concluiu nos cinco nós com os novos textos e as pastas definitivas. Nenhum reboot, Plans completos, Longhorn com duas réplicas RW por volume, Prometheus e RabbitMQ respondendo. A fila aguardou a correção do DNS e a recuperação das réplicas, preservando no máximo um nó em manutenção. A migração para `sle-micro/` manteve os UIDs dos recursos e o Fleet ficou com 3/3 recursos prontos.
 - openSUSE Leap 16.0: `opensuse-20261018-01` executada pelo Fleet nos três servidores Rancher, sem Longhorn/PVs. Instalou atualizações e confirmou reboot nos três: kernel `6.12.0-160000.2-default` → `6.12.0-160000.39-default`. Plan Complete=True, nós Ready/sem cordon, trava liberada e Fleet com 2/2 recursos prontos. Máximo de um nó em manutenção; todas as aplicações verificadas, exceto o Deployment Observability autorizado somente no lab. O Plan de Kubernetes existente permaneceu inalterado.
 - SLES tradicional: o caminho zypper foi validado em testes locais, mas não há um host SLES tradicional neste lab para teste real. Isso não equivale a homologação de todas as versões SLES.
 - 58 testes locais cobrem descoberta, ordem, trava, cores, falhas, storage e retornos do Zypper; fixtures adicionais cobrem ausência de Longhorn, acesso negado à API, heartbeats e retomada. Não há testes artificiais dentro do diretório entregue pelo Fleet.
