@@ -25,6 +25,21 @@ Função dos arquivos:
 
 Todos os Plans reutilizam a ServiceAccount `cattle-system/system-upgrade-controller`, já existente. Este projeto não cria Roles, bindings ou outra conta. Os Jobs herdam as permissões dessa conta; confira o RBAC existente, inclusive eventual cluster-admin. O SUC, a conta e as permissões são pré-requisitos para outro cluster.
 
+## Copiar para outro ambiente
+
+Copie o diretório completo do SO escolhido para o Git monitorado pelo Fleet. Antes de publicar o primeiro deploy, confira estes pontos uma vez:
+
+| Conferir | O que ajustar no destino |
+|---|---|
+| Fleet | Caminho de um único perfil e seleção do cluster correto. |
+| RKE2 e SUC | Controller ativo, CRD `Plan`, ServiceAccount existente e permissões para os recursos usados; a política de admissão precisa permitir os Jobs privilegiados. |
+| Imagem | Tag correspondente ao RKE2 e acesso ao registry; ajustar a imagem em cada Plan quando necessário. |
+| Nós e SO | Perfil correto, ferramentas exigidas, repositórios acessíveis, espaço livre e topologia descrita abaixo. Os nomes dos nós são descobertos automaticamente. |
+| Aplicações e dados | Cluster saudável, capacidade para drain, PDBs e volumes aptos à manutenção. `allowEmptyDirDeletion: true` nos exemplos SUSE é uma autorização do lab: use **false** no cliente, salvo autorização específica para descartar esses dados temporários. |
+| Operação | Backup conforme o procedimento do ambiente e nenhuma outra manutenção concorrente. |
+
+Com esses requisitos atendidos, o deploy inicia a rotina e as próximas execuções exigem apenas uma nova `version` (igual nos dois Plans, quando houver server e agent). Não há habilitação manual por anotação. Uma trava `failed` de uma tentativa anterior continua exigindo diagnóstico e liberação consciente; ela não é apagada pela atualização dos arquivos. O teste em um lab confirma o comportamento observado, sem substituir a validação dos requisitos do cliente.
+
 ## Snapshots etcd sob controle do operador
 
 Os três perfis **não criam snapshots etcd automaticamente** durante o update do SO. O comando `rke2 etcd-snapshot save` foi retirado dos scripts. A criação do backup fica sob controle do operador, antes da manutenção quando necessário; os snapshots etcd existentes são preservados.
@@ -213,6 +228,8 @@ O primeiro deploy já inicia a atualização. Não existe mais a rodada `prepare
 
 Antes do primeiro drain, o script prepara **todos os destinos**, um por vez, com Jobs temporários `suc-os-schedules-*`. Eles usam a imagem e a ServiceAccount do Plan, sem token de API montado no container. Executam somente as verificações do host e o ajuste dos agendamentos: não fazem drain, não instalam pacotes e não reiniciam. Falha em qualquer destino bloqueia o fluxo inteiro antes do drain. Os Jobs concluídos são reutilizados pela mesma rodada e removidos pelo TTL após 24 horas; uma nova `version`, mudança desses scripts/imagem ou troca do UID de um nó exige nova preparação. Não é necessário criar outro YAML.
 
+O drain pode remover o Pod de preparação já concluído. O Job permanece com `Complete=True` para registrar o resultado; isso não representa uma preparação pendente. Os logs desse Pod podem deixar de estar disponíveis após sua remoção.
+
 - **SUSE:** verifica/desativa `transactional-update.timer`, `os-update.timer` e `rebootmgr.service`, quando existem. Uma transação automática ou gerenciador de pacotes ativo bloqueia; seus processos não são encerrados.
 - **Ubuntu:** verifica/desativa `apt-daily.timer` e `apt-daily-upgrade.timer` e grava `/etc/apt/apt.conf.d/99-suc-os-periodic`, desativando APT periódico e reboot automático. Serviços ativos, locks ocupados e reboot anterior pendente bloqueiam.
 
@@ -261,7 +278,8 @@ Isso é um procedimento próprio, não uma certificação de compatibilidade de 
 - Fluxo único (19/10/2026): 37 testes locais aprovados e sintaxe de 27 scripts Bash verificada. A validação cobre o primeiro deploy sem anotações, preparação em todos os nós antes do drain, repetição idempotente, falhas de serviços/reboot/locks e preservação da trava. Resultados e limites da execução real são informados separadamente.
 
 - Revisão de 19/10/2026: 25 testes locais com comandos simulados, além da leitura de 11 YAMLs e verificação de sintaxe de 21 scripts Bash. Cobrem Ubuntu 22.04/24.04 com e sem pedido de reboot, falhas APT/dpkg, Zypper, Micro, storage, saúde e retomada.
-- Não houve atualização real de nós Ubuntu nesta revisão. A primeira execução precisa ser validada no cluster Ubuntu selecionado.
+- Validação real do fluxo automático em 19/10/2026, pelo Fleet: três servidores e dois workers SLE Micro 6.2 concluíram em série, sem sobreposição dos containers de upgrade. Ambos os Plans terminaram `Complete=True`, todos os nós Ready/sem cordon e a trava foi liberada. Os dois volumes Longhorn terminaram saudáveis, cada um com pelo menos duas réplicas RW; aplicações recuperadas. O fluxo respeitou um bloqueio temporário de PDB e aguardou a recuperação dos volumes. Não havia pacotes novos: cinco resultados `no-change-no-reboot`, confirmados pelo boot ID inalterado. Essa rodada não exercitou instalação de novos pacotes nem reboot.
+- As alterações atuais de openSUSE/SLES e Ubuntu passaram pelos testes locais; não foram executadas em nós desses sistemas nesta revisão. A primeira execução precisa ser validada no cluster selecionado.
 - Testes reais anteriores em SLE Micro e openSUSE não homologam automaticamente as alterações atuais nem todas as versões de SLES.
 - Os testes de desenvolvimento ficam fora dos diretórios entregues pelo Fleet; não são necessários para operar os Plans.
 
