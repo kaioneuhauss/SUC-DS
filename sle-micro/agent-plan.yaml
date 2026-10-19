@@ -19,7 +19,7 @@ spec:
   # UNICA ALTERACAO HABITUAL: novo identificador, igual nos DOIS Plans.
   # Exemplo futuro: sles-20261019-01. Isso dispara updates disponiveis no repositorio;
   # nao seleciona uma release do SO. Publique ambos juntos e espere a rodada terminar.
-  version: sles-20261018-03
+  version: sles-19-10-2026
 
   nodeSelector:
     matchLabels:
