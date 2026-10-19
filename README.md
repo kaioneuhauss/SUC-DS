@@ -57,7 +57,7 @@ Esta alteração é apenas no procedimento de SO: os agendamentos de snapshots c
    ```
 3. Coloque **exatamente o mesmo valor novo** em `sle-micro/agent-plan.yaml`. Use um identificador que nunca foi executado. `sles-20261019-01` é apenas um nome de rodada: não instala uma release específica do SO e não atualiza Kubernetes.
 4. Publique os dois arquivos juntos na branch `main` acompanhada pelo GitRepo configurado para o cluster SLE Micro. Pela interface do GitHub, edite ambos na mesma branch e integre o PR depois das duas alterações. Não faça dois commits separados diretamente em main durante uma rodada.
-5. No Rancher, abra os Pods do namespace `cattle-system`. Leia **prepare** para acompanhar espera/validações e depois **upgrade** para drain, atualização e resultado.
+5. No Rancher, abra os Pods do namespace `cattle-system`. Leia **prepare** para acompanhar a ordem e a espera dos servers; depois **upgrade** para saúde, drain, atualização e resultado.
 6. Aguarde ambos os Plans Complete=True, nós Ready/sem cordon e ausência da trava `suc-os-maintenance-gate`. Só então inicie outra rodada.
 
 Não é necessário editar scripts, conhecer Bash ou usar Python para esse procedimento. O `transactional-update --non-interactive --drop-if-no-change up` procura as atualizações disponíveis nos repositórios configurados no host. Sem alterações, informa que **não reiniciará** e libera o próximo nó após validar a saúde. O drain ainda pode mover workloads mesmo quando não há pacotes novos.
@@ -83,7 +83,7 @@ Este perfil atualiza pacotes **dentro da release instalada**. Não migra de Ubun
 1. Confira backup manual, saúde, capacidade, repositórios e a tag RKE2 dos dois Plans. Os nós precisam de `apt-get`, `dpkg`, `needrestart`, `update-notifier-common` e `fuser` (pacote `psmisc`), além das ferramentas básicas verificadas pelo script. A checagem bloqueia se faltar alguma ferramenta, houver dpkg incompleto, processo usando locks, reboot anterior pendente ou pouco espaço. Não apaga locks nem tenta reparar pacotes automaticamente.
 2. No Fleet, configure o GitRepo para **somente `ubuntu/`**, a branch desejada e o cluster Ubuntu correspondente. Não selecione a raiz do repositório. Mantenha os dois Plans com a mesma `version`.
 3. Publique os arquivos. O primeiro deploy prepara os agendamentos automaticamente em todos os nós e inicia a atualização; não há troca de ACTION nem anotação manual.
-4. Acompanhe `prepare` e `upgrade` no Rancher. O fluxo é: saúde → trava → agendamentos → drain → APT → reboot **somente se solicitado** → validação → próximo nó.
+4. Acompanhe `prepare` e `upgrade` no Rancher. O fluxo é: ordem → trava → agendamentos → saúde → drain → APT → reboot **somente se solicitado** → validação → próximo nó.
 5. Nas rodadas seguintes, altere apenas **`version` nos dois Plans**, com o mesmo novo valor. Aguarde ambos Complete=True, nós Ready/sem cordon e trava ausente antes de outra rodada. `Fleet Ready` confirma entrega, não conclusão da manutenção.
 
 No Ubuntu, `allowEmptyDirDeletion` começa em **false**: o descarte autorizado para os outros labs não vale automaticamente neste cluster. Se o drain bloquear por `emptyDir`, avalie os dados indicados antes de autorizar uma exceção. Longhorn continua opcional; volumes locais e backends não revisados bloqueiam.
@@ -141,10 +141,25 @@ O exemplo destina-se ao cluster Linux com control-plane e etcd juntos. Um nó so
 
 Um nó Linux novo passa a ser selecionado automaticamente. A preparação dos agendamentos desse nó ocorre automaticamente antes do drain da rodada. Não é necessário atualizar uma lista de nomes.
 
+## Por que o drain está no script?
+
+O SUC **já oferece drain nativo**. A ordem oficial é `prepare → drain → upgrade`, e o controller faz uncordon quando o Job termina. Um procedimento que não precisa retomar uma transação após reboot pode usar essa opção diretamente. [API do Plan](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/doc/plan.md).
+
+Neste procedimento, o Job pode precisar de um novo pod após o reboot. O pod novo executa seus init containers novamente; o drain nativo seria repetido antes de chegar à verificação do resultado. Aqui, a fase persistida permite retomar a transação sem repetir drain nem atualização. O script também libera o agendamento **antes** da checagem final, para permitir que aplicações e réplicas Longhorn se recuperem, mantendo a trava até confirmar a saúde. [Init containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/) e [implementação do drain no SUC](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/pkg/upgrade/job/job.go#L327-L441).
+
+O drain continua sendo o **`kubectl drain` padrão**, com PDBs, timeout e encerramento normal dos pods. Não foi reimplementado um mecanismo de evacuação. O script acrescenta validação de volumes, retomada e mensagens de falha. Não configure `spec.drain` junto com ele: isso executaria a etapa duas vezes.
+
+- `force: true` permite remover pods sem controlador; não é necessário neste exemplo e não ignora PDBs.
+- `deleteLocalData: true` / `deleteEmptydirData: true` autorizam perder dados de `emptyDir`; não são uma proteção para volumes locais.
+- `jobActiveDeadlineSecs: 0` remove o limite do Job. Aqui há limites para encerrar a espera e exigir diagnóstico, preservando uma transação de pacotes já iniciada no host.
+- Uma busca por `NotReady` no texto de `kubectl get nodes` não trata falha da API com segurança. As checagens deste projeto exigem respostas válidas e condições explícitas.
+
+A simplificação desta revisão elimina as duas verificações de saúde repetidas antes do drain e um marcador de estado sem uso. Permanecem uma checagem antes da manutenção e outra após a recuperação. O uso normal continua sendo publicar o diretório completo e, nas próximas rodadas, alterar apenas `version`.
+
 ## O que acontece em cada etapa
 
-1. **prepare:** descobre os nós; nos workers, espera todos os servers na mesma version/hash. Confere API, Ready, ausência de pressão/cordon, heartbeats recentes, workloads e Longhorn quando presente. Exige 60 segundos contínuos de saúde. Não altera o host.
-2. **upgrade / trava:** reserva a manutenção global para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, repete a saúde, bloqueia outros Jobs de manutenção conflitantes e prepara automaticamente os agendamentos de todos os destinos antes do primeiro drain.
+1. **prepare:** organiza a ordem; nos workers, descobre e espera todos os servers na mesma version/hash. Não altera o host nem repete a checagem de saúde.
+2. **upgrade / trava:** descobre os nós, reserva a manutenção para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, bloqueia outros Jobs de manutenção conflitantes e prepara automaticamente os agendamentos de todos os destinos. Em seguida, exige 60 segundos contínuos de saúde: API, Ready, pressão, cordon, heartbeats, workloads e Longhorn quando presente. Essa validação ocorre uma vez, imediatamente antes do drain.
 3. **upgrade / drain:** faz cordon, verifica volumes e evacua workloads respeitando PDBs. Não usa force nem remove finalizers. O drain está no script para não ser repetido automaticamente após reboot.
 4. **upgrade / SO:** informa que o backup etcd fica sob controle do operador e executa a transação no systemd do host. A saída aparece no log do container e fica persistida no host. Sem alterações, não há reboot.
 5. **upgrade / validação:** quando houve reboot, confere boot ID e, no Micro, o snapshot ativo. Espera RKE2 ativo, faz uncordon, aguarda recuperação dos workloads/volumes por 60 segundos e só então libera a trava.
@@ -177,7 +192,7 @@ Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquel
 | `postCompleteDelay: 30s` | Intervalo adicional depois de cada sucesso. |
 | `serviceAccountName` | Conta existente usada para consultar e operar a API. |
 | `nodeSelector` / `tolerations` | Escolhem os papéis Linux e permitem execução em masters com taints e retomada após cordon. |
-| `prepare` / `upgrade` | Container inicial de validação e container que executa a manutenção. |
+| `prepare` / `upgrade` | Container que organiza a ordem e container que valida a saúde e executa a manutenção. |
 | `image` / `command` / `args` | Imagem de ferramentas, interpretador Bash e script a executar. |
 | `securityContext` | Root e privilégio para o container upgrade operar o host montado em /host pelo SUC. |
 | `secrets` | Monta o código compartilhado em /run/suc-os. |
@@ -196,7 +211,7 @@ A mudança da `version` dispara uma execução mesmo mantendo imagem e Secret ig
 
 | Chave | O que faz |
 |---|---|
-| `prepare.sh` | Organiza verificações iniciais e reconhece retomada após reboot. |
+| `prepare.sh` | Organiza a ordem; workers aguardam todos os servers da mesma rodada. |
 | `run.sh` | Organiza a manutenção e acompanha o processo do host. |
 | `common.sh` | Logs, API, descoberta de nós, trava e valores padrão. |
 | `wait-servers.sh` | Espera a conclusão da mesma rodada em todos os servers. |
@@ -274,6 +289,8 @@ Também foram corrigidos dois pontos: `TimeoutStartSec=infinity` impede que o li
 Isso é um procedimento próprio, não uma certificação de compatibilidade de qualquer SO/kernel/pacote com RKE2. A conta existente permanece com as permissões que já possui; revise esse acesso antes de usar em outro cluster. `allowEmptyDirDeletion: true` dos perfis SUSE é uma autorização de lab, não um padrão recomendado para outros clusters. Os limites de tempo e espaço são mínimos operacionais e precisam comportar o tamanho real do ambiente.
 
 ## Validação e limites
+
+- Simplificação do drain (19/10/2026): 43 testes locais aprovados. Os novos cenários executam o fluxo com comandos simulados e verificam falha de saúde antes do cordon, falha de drain sem update/uncordon, volume local bloqueado, retomada sem segundo drain/transação e rejeição de rollback inesperado no Micro.
 
 - Fluxo único (19/10/2026): 37 testes locais aprovados e sintaxe de 27 scripts Bash verificada. A validação cobre o primeiro deploy sem anotações, preparação em todos os nós antes do drain, repetição idempotente, falhas de serviços/reboot/locks e preservação da trava. Resultados e limites da execução real são informados separadamente.
 
