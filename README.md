@@ -113,7 +113,7 @@ image: &maintenance_image registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2
 
 Essa é a imagem de ferramentas de upgrade do RKE2, não a imagem do kube-apiserver. O `command` dos Plans executa nossos scripts de SO em vez do upgrade do RKE2. O script verifica a compatibilidade do kubectl com a API (no máximo uma versão minor de diferença), além das ferramentas necessárias. A correspondência de tag deve ser revista após cada upgrade do cluster; não é uma garantia para toda versão futura. Sem digest, o conteúdo depende da tag publicada no registry.
 
-No laboratório SLE Micro 6.2, o sistema anuncia `SUSE Linux Enterprise Server 16.0` em `PRETTY_NAME` por compatibilidade. O perfil exige também `VARIANT_ID=transactional`, `SUSE_SUPPORT_PRODUCT=SUSE Linux Micro` e versão do produto `6.2` (ou o ID Micro equivalente). Por isso uma linha do host pode mostrar SLES 16.0 enquanto a ação identifica corretamente SLE Micro 6.2. O perfil tradicional rejeita esse host transacional.
+No SUSE Linux Micro 6.2, `PRETTY_NAME` pode informar `SUSE Linux Enterprise Server 16.0` por compatibilidade. O perfil valida `VARIANT_ID=transactional`, `SUSE_SUPPORT_PRODUCT=SUSE Linux Micro` e versão do produto `6.2` (ou o ID Micro equivalente). O log usa `SUSE_PRETTY_NAME` para mostrar o produto validado e informa o atualizador `transactional-update`; a escolha do comando não depende de `PRETTY_NAME`. O perfil tradicional rejeita esse host transacional. [Identificação oficial dos produtos SUSE](https://documentation.suse.com/sles/16.0/html/SLE-os-identification/index.html).
 
 ## Seleção e descoberta dos nós
 
