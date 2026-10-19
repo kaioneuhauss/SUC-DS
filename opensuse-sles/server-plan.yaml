@@ -13,6 +13,7 @@ spec:
   concurrency: 1
   exclusive: true                 # Evita outro Plan exclusivo no mesmo no.
   jobActiveDeadlineSecs: 18000  # Limite total do Job, em segundos.
+  # Cordon/drain ficam no script: na retomada apos reboot, nao evacuar o no novamente.
   postCompleteDelay: 30s          # Pausa adicional antes do proximo no.
   serviceAccountName: system-upgrade-controller  # Conta existente do SUC.
 
@@ -40,7 +41,7 @@ spec:
     # &maintenance_image nomeia a imagem; *maintenance_image abaixo reutiliza-a.
     image: &maintenance_image registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1
     command: [/bin/bash]
-    args: [/run/suc-os/prepare.sh]  # Mostra verificacoes e motivos de espera no log.
+    args: [/run/suc-os/prepare.sh]  # Workers aguardam os servers; saude conferida no upgrade.
 
   upgrade:
     image: *maintenance_image
