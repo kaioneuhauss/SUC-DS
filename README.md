@@ -1,6 +1,6 @@
 # Atualização do SO pelo Fleet
 
-O uso normal é **alterar `version` e publicar no Git**. O Fleet entrega os YAMLs; o SUC atualiza um nó por vez e só libera o próximo depois da recuperação do cluster.
+O **primeiro deploy já inicia o fluxo completo**. Nas próximas rodadas, basta **alterar `version` e publicar no Git**. Não há ação de preparação separada nem anotação manual nos nós. O Fleet entrega os YAMLs; o SUC atualiza um nó por vez e só libera o próximo depois da recuperação do cluster.
 
 | Diretório | Sistema / cluster | Arquivos para operar |
 |---|---|---|
@@ -35,8 +35,8 @@ Esta alteração é apenas no procedimento de SO: os agendamentos de snapshots c
 
 ## Passo a passo: SLE Micro 6.2
 
-1. No Rancher, confirme os nós Ready, os dois Plans anteriores Complete=True e ausência de manutenção em andamento. O Fleet Ready confirma a entrega dos arquivos, não o término do update.
-2. Abra `sle-micro/server-plan.yaml` e altere somente `spec.version`, por exemplo:
+1. No Rancher, confirme os nós Ready e ausência de manutenção em andamento. Se os Plans já existem, aguarde a rodada anterior concluir. O Fleet Ready confirma a entrega dos arquivos, não o término do update.
+2. Configure o GitRepo para `sle-micro/` e o cluster desejado. O primeiro deploy já prepara os agendamentos e inicia a manutenção. Para uma nova rodada, altere `spec.version` em `sle-micro/server-plan.yaml`, por exemplo:
    ```yaml
    version: sles-20261019-01
    ```
@@ -50,7 +50,7 @@ Não é necessário editar scripts, conhecer Bash ou usar Python para esse proce
 ## Passo a passo: openSUSE Leap / SLES
 
 1. No cluster Rancher, confirme todos os nós Ready, aplicações saudáveis e nenhuma manutenção em andamento.
-2. Abra `opensuse-sles/server-plan.yaml`. Depois da preparação inicial, `ACTION` permanece em `update` e `PROFILE` em `zypper`.
+2. Abra `opensuse-sles/server-plan.yaml`. O primeiro deploy já executa o fluxo completo; mantenha `PROFILE` em `zypper`.
 3. Altere **somente `version`**, por exemplo `opensuse-20261019-01`, na branch acompanhada pelo GitRepo. Este perfil fornece um Plan para clusters compostos somente de servidores.
 4. Configure o GitRepo para acompanhar somente `opensuse-sles/` e selecionar exclusivamente o cluster desejado. O Plan de SO chama-se `os-maintenance-zypper`; ele é separado de Plans usados para atualizar Kubernetes.
 5. Acompanhe `prepare` e `upgrade` em `cattle-system`. Aguarde o Plan Complete=True, todos os nós Ready/sem cordon e ausência da trava antes de outra rodada.
@@ -67,10 +67,9 @@ Este perfil atualiza pacotes **dentro da release instalada**. Não migra de Ubun
 
 1. Confira backup manual, saúde, capacidade, repositórios e a tag RKE2 dos dois Plans. Os nós precisam de `apt-get`, `dpkg`, `needrestart`, `update-notifier-common` e `fuser` (pacote `psmisc`), além das ferramentas básicas verificadas pelo script. A checagem bloqueia se faltar alguma ferramenta, houver dpkg incompleto, processo usando locks, reboot anterior pendente ou pouco espaço. Não apaga locks nem tenta reparar pacotes automaticamente.
 2. No Fleet, configure o GitRepo para **somente `ubuntu/`**, a branch desejada e o cluster Ubuntu correspondente. Não selecione a raiz do repositório. Mantenha os dois Plans com a mesma `version`.
-3. A primeira versão já vem com **`ACTION: prepare-host`** e `version: ubuntu-prepare-20261019-01`. Publique para preparar os agendamentos; essa fase não instala atualizações nem reinicia. Ela desativa `apt-daily.timer` e `apt-daily-upgrade.timer` e grava `/etc/apt/apt.conf.d/99-suc-os-periodic`, com `APT::Periodic::Enable "0"` e `Unattended-Upgrade::Automatic-Reboot "false"`. O APT manual/SUC continua funcionando. Uma transação automática já ativa bloqueia e deve terminar normalmente.
-4. Aguarde os dois Plans concluírem. Nos dois arquivos, mude **`ACTION` para `update`** e use a mesma nova `version`, por exemplo `ubuntu-20261020-01`. Mantenha `PROFILE: ubuntu`. Publique os dois juntos.
-5. Acompanhe `prepare` e `upgrade` no Rancher. O fluxo é: saúde → trava → drain → APT → reboot **somente se solicitado** → validação → próximo nó. Sem pedido de reboot, verifica a recuperação sem reiniciar.
-6. Nas rodadas seguintes, altere apenas **`version` nos dois Plans**. Aguarde ambos Complete=True, nós Ready/sem cordon e trava ausente antes de outra rodada. `Fleet Ready` confirma entrega, não conclusão da manutenção.
+3. Publique os arquivos. O primeiro deploy prepara os agendamentos automaticamente em todos os nós e inicia a atualização; não há troca de ACTION nem anotação manual.
+4. Acompanhe `prepare` e `upgrade` no Rancher. O fluxo é: saúde → trava → agendamentos → drain → APT → reboot **somente se solicitado** → validação → próximo nó.
+5. Nas rodadas seguintes, altere apenas **`version` nos dois Plans**, com o mesmo novo valor. Aguarde ambos Complete=True, nós Ready/sem cordon e trava ausente antes de outra rodada. `Fleet Ready` confirma entrega, não conclusão da manutenção.
 
 No Ubuntu, `allowEmptyDirDeletion` começa em **false**: o descarte autorizado para os outros labs não vale automaticamente neste cluster. Se o drain bloquear por `emptyDir`, avalie os dados indicados antes de autorizar uma exceção. Longhorn continua opcional; volumes locais e backends não revisados bloqueiam.
 
@@ -125,12 +124,12 @@ Não há nomes de hosts nos Plans. O Kubernetes fornece os nomes e labels pela A
 
 O exemplo destina-se ao cluster Linux com control-plane e etcd juntos. Um nó somente etcd bloqueia para revisão da ordem; não é tratado como worker. A descoberta não identifica um nó removido da API antes de a rodada começar: confira a topologia esperada no Rancher antes de publicar.
 
-Um nó Linux novo passa a ser selecionado automaticamente. Antes de incluí-lo em uma rodada de update, ele precisa da preparação dos agendamentos descrita abaixo. Não é necessário atualizar uma lista de nomes.
+Um nó Linux novo passa a ser selecionado automaticamente. A preparação dos agendamentos desse nó ocorre automaticamente antes do drain da rodada. Não é necessário atualizar uma lista de nomes.
 
 ## O que acontece em cada etapa
 
 1. **prepare:** descobre os nós; nos workers, espera todos os servers na mesma version/hash. Confere API, Ready, ausência de pressão/cordon, heartbeats recentes, workloads e Longhorn quando presente. Exige 60 segundos contínuos de saúde. Não altera o host.
-2. **upgrade / trava:** reserva a manutenção global para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, repete a saúde e bloqueia outros Jobs de manutenção conflitantes.
+2. **upgrade / trava:** reserva a manutenção global para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, repete a saúde, bloqueia outros Jobs de manutenção conflitantes e prepara automaticamente os agendamentos de todos os destinos antes do primeiro drain.
 3. **upgrade / drain:** faz cordon, verifica volumes e evacua workloads respeitando PDBs. Não usa force nem remove finalizers. O drain está no script para não ser repetido automaticamente após reboot.
 4. **upgrade / SO:** informa que o backup etcd fica sob controle do operador e executa a transação no systemd do host. A saída aparece no log do container e fica persistida no host. Sem alterações, não há reboot.
 5. **upgrade / validação:** quando houve reboot, confere boot ID e, no Micro, o snapshot ativo. Espera RKE2 ativo, faz uncordon, aguarda recuperação dos workloads/volumes por 60 segundos e só então libera a trava.
@@ -146,7 +145,7 @@ Etapa 6 de 6 — Concluir a manutenção deste nó
 [CONCLUIDO] Não havia atualizações disponíveis. Este nó não foi reiniciado. O cluster está saudável; o próximo nó já pode começar.
 ```
 
-Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquele Pod não executará novas etapas, e `[COMO CORRIGIR]` orienta o diagnóstico. Falha fatal no prepare tenta registrar a mesma trava global em failed, sem sobrescrever uma manutenção existente. O upgrade preserva a trava em failed. O SUC pode recriar o Pod, mas uma trava em failed impede que essa repetição pule a falha. Se a API estiver indisponível, o log informa que não foi possível confirmar a gravação da trava; confira seu estado. Uma trava já existente em updating/verifying, com o mesmo nó e hash, permite retomar a transação persistida após reboot. Um worker também interrompe a espera se encontrar a trava em failed.
+Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquele Pod não executará novas etapas, e `[COMO CORRIGIR]` orienta o diagnóstico. Falha fatal no prepare tenta registrar a mesma trava global em failed, sem sobrescrever uma manutenção existente. O upgrade preserva a trava em failed, inclusive em falha da preparação automática dos agendamentos. O SUC pode recriar o Pod, mas uma trava em failed impede que essa repetição pule a falha. Se a API estiver indisponível, o log informa que não foi possível confirmar a gravação da trava; confira seu estado. Uma trava já existente em updating/verifying, com o mesmo nó e hash, permite retomar a transação persistida após reboot. Um worker também interrompe a espera se encontrar a trava em failed.
 
 **Interromper o procedimento não é desfazer pacotes já instalados nem matar uma transação ativa.** Se o systemd ainda estiver executando a transação, o log avisa para verificar seu resultado antes de qualquer recuperação. Isso evita interromper escrita de pacotes à força.
 
@@ -167,7 +166,6 @@ Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquel
 | `image` / `command` / `args` | Imagem de ferramentas, interpretador Bash e script a executar. |
 | `securityContext` | Root e privilégio para o container upgrade operar o host montado em /host pelo SUC. |
 | `secrets` | Monta o código compartilhado em /run/suc-os. |
-| `ACTION` | `update` na rotina; `prepare-host` somente para preparar os agendamentos. |
 | `PROFILE` | `micro62`, `zypper` ou `ubuntu`, conforme o diretório. O script verifica o SO real antes de operar o host. |
 | `SERVER_PLAN` | Nome do Plan dos servers que o prepare do worker deve esperar. |
 | `PEER_PLAN` | Plan parceiro permitido; outros Jobs SUC ativos bloqueiam. |
@@ -188,6 +186,8 @@ A mudança da `version` dispara uma execução mesmo mantendo imagem e Secret ig
 | `common.sh` | Logs, API, descoberta de nós, trava e valores padrão. |
 | `wait-servers.sh` | Espera a conclusão da mesma rodada em todos os servers. |
 | `health.sh` | Valida nós, heartbeats, workloads e Longhorn opcional. |
+| `automatic.sh` | Prepara os agendamentos em todos os nós com Jobs temporários, antes do primeiro drain; reutiliza os concluídos na mesma rodada. |
+| `host-automatic.sh` | Desativa agendamentos conhecidos, preserva o estado original e bloqueia se houver transação/reboot em andamento. |
 | `host-preflight.sh` | Confere SO, ferramentas, systemd e pelo menos 2 GiB livres em / e /var. Ubuntu exige também 200 MiB em /boot e 50 MiB em /boot/efi quando forem partições separadas. |
 | `host-worker.sh` | Executa somente o gerenciador do SO daquele diretório; persiste resultado e reinicia apenas quando necessário. |
 | `storage-guard.jq` / `policy.json` | Verificam os volumes e as exceções autorizadas. |
@@ -204,15 +204,23 @@ Os padrões avançados estão comentados no começo de `common.sh`:
 | `DRAIN_TIMEOUT` / `HOST_TIMEOUT` | 30 min para drain e 7200 s de espera pela transação, com margem de 600 s no acompanhamento. Timeout bloqueia a fila; não mata o APT/Zypper/transactional-update. |
 | `WAIT_TIMEOUT` | Até 43200 s aguardando os servers. |
 | `ACTIVATE_PENDING` | Apenas Micro, `true`: ativa snapshot pendente após drain; uma nova transação fica para a próxima rodada. |
-| `MANAGE_AUTOMATIC` | `true`, usado apenas em prepare-host para verificar/desativar os agendamentos de update/reboot existentes. |
 
 `NODE`, `PLAN`, `HASH` e a version são fornecidos pelo SUC ao Job. `EXPECTED_NODES` e `SERVER_NODES` vêm da descoberta na API; não são parâmetros para preencher. `STATE` guarda o resultado em `/var/lib/suc-os/HASH` no host. A trava `suc-os-maintenance-gate` não expira automaticamente: uma falha não autoriza o próximo nó.
 
-## Preparação inicial e volumes
+## Agendamentos automáticos e volumes
 
-A preparação dos agendamentos é obrigatória antes do primeiro update. O comando `transactional-update` continua funcionando normalmente quando chamado pelo procedimento.
+O primeiro deploy já inicia a atualização. Não existe mais a rodada `prepare-host`, o parâmetro `ACTION` nos Plans ou a exigência da anotação `suc-os.cattle.io/automatic-updates=disabled`. Anotações antigas não liberam nem bloqueiam a rotina.
 
-Para preparar outro cluster/nós novos: confira primeiro SO, registro/repositórios SUSE, backup, imagem, conta e política de volumes. Use `ACTION: prepare-host` nos Plans do perfil selecionado, com uma nova version (igual nos dois Plans do Micro), publique e espere todos concluírem. Nos perfis SUSE, isso verifica/desativa `transactional-update.timer`, `os-update.timer` e `rebootmgr.service`, quando existem, sem executar update ou reboot. No Ubuntu, use a preparação APT descrita no passo a passo próprio. Depois volte ACTION para update com outra version. Não execute preparação enquanto outro update estiver ativo. Os novos nós precisam também da revisão de outros Plans/agendamentos conflitantes.
+Antes do primeiro drain, o script prepara **todos os destinos**, um por vez, com Jobs temporários `suc-os-schedules-*`. Eles usam a imagem e a ServiceAccount do Plan, sem token de API montado no container. Executam somente as verificações do host e o ajuste dos agendamentos: não fazem drain, não instalam pacotes e não reiniciam. Falha em qualquer destino bloqueia o fluxo inteiro antes do drain. Os Jobs concluídos são reutilizados pela mesma rodada e removidos pelo TTL após 24 horas; uma nova `version`, mudança desses scripts/imagem ou troca do UID de um nó exige nova preparação. Não é necessário criar outro YAML.
+
+- **SUSE:** verifica/desativa `transactional-update.timer`, `os-update.timer` e `rebootmgr.service`, quando existem. Uma transação automática ou gerenciador de pacotes ativo bloqueia; seus processos não são encerrados.
+- **Ubuntu:** verifica/desativa `apt-daily.timer` e `apt-daily-upgrade.timer` e grava `/etc/apt/apt.conf.d/99-suc-os-periodic`, desativando APT periódico e reboot automático. Serviços ativos, locks ocupados e reboot anterior pendente bloqueiam.
+
+A alteração dos agendamentos é persistente, inclusive após falha. O estado original fica em `/var/lib/suc-os/automatic-units-before.txt`; no Ubuntu, um drop-in anterior é preservado em `apt-periodic-before.conf`. Para voltar à automação anterior, primeiro conclua a manutenção SUC, restaure o drop-in quando aplicável e reative somente as unidades que estavam habilitadas. O gerenciador de pacotes manual/SUC continua disponível. [Timers no SUSE Micro](https://documentation.suse.com/sle-micro/6.2/html/Micro-transactional-updates/index.html) e [atualizações automáticas no Ubuntu](https://ubuntu.com/server/docs/how-to/software/automatic-updates/).
+
+Agendamentos externos, como automações de administração, cron próprio e outros Plans de upgrade, também não devem iniciar manutenção concorrente. Esses mecanismos personalizados não são removidos pelo script. Antes do deploy, revise SO, registro/repositórios, backup manual, imagem, conta e política de volumes.
+
+**Migração de uma tentativa já bloqueada:** publique Secret e Plans juntos. A trava antiga em `failed` é preservada; retirar a exigência da anotação não autoriza apagar uma falha de origem desconhecida. Confirme nos logs que a falha antiga ocorreu antes do drain/update, interrompa as tentativas antigas desses Plans e então trate a trava. Não marque nós como preparados manualmente. Um Plan antigo ainda com `ACTION=prepare-host` é recusado para não transformar uma preparação em atualização silenciosamente.
 
 Longhorn é opcional. Sem API/volumes Longhorn, a validação segue com PDBs e proteção dos demais volumes. Erro de consulta/permissão bloqueia; não é interpretado como ausência. Com Longhorn, exige saúde/redundância e protege a última réplica; espera reconstruções antes de avançar.
 
@@ -249,6 +257,8 @@ Também foram corrigidos dois pontos: `TimeoutStartSec=infinity` impede que o li
 Isso é um procedimento próprio, não uma certificação de compatibilidade de qualquer SO/kernel/pacote com RKE2. A conta existente permanece com as permissões que já possui; revise esse acesso antes de usar em outro cluster. `allowEmptyDirDeletion: true` dos perfis SUSE é uma autorização de lab, não um padrão recomendado para outros clusters. Os limites de tempo e espaço são mínimos operacionais e precisam comportar o tamanho real do ambiente.
 
 ## Validação e limites
+
+- Fluxo único (19/10/2026): 37 testes locais aprovados e sintaxe de 27 scripts Bash verificada. A validação cobre o primeiro deploy sem anotações, preparação em todos os nós antes do drain, repetição idempotente, falhas de serviços/reboot/locks e preservação da trava. Resultados e limites da execução real são informados separadamente.
 
 - Revisão de 19/10/2026: 25 testes locais com comandos simulados, além da leitura de 11 YAMLs e verificação de sintaxe de 21 scripts Bash. Cobrem Ubuntu 22.04/24.04 com e sem pedido de reboot, falhas APT/dpkg, Zypper, Micro, storage, saúde e retomada.
 - Não houve atualização real de nós Ubuntu nesta revisão. A primeira execução precisa ser validada no cluster Ubuntu selecionado.
