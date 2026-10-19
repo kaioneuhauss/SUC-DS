@@ -1,0 +1,6 @@
+# Selecione somente ubuntu/ e o cluster Ubuntu correspondente no GitRepo.
+name: suc-os-ubuntu
+defaultNamespace: cattle-system
+# YAML puro; Fleet gerencia o empacotamento sem Chart.yaml adicional.
+helm:
+  releaseName: suc-os-ubuntu
