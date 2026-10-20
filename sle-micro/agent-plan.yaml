@@ -31,7 +31,7 @@ spec:
     timeout: 15m                 # Se não concluir, o container upgrade não inicia.
     ignoreDaemonSets: true       # DaemonSets são gerenciados pelo próprio cluster.
     force: false                 # Não remover Pods sem controlador à força.
-    deleteEmptydirData: false    # true SOMENTE se aceitar perder os dados de emptyDir.
+    deleteEmptydirData: true     # LAB: descarte temporário autorizado pelo operador.
     disableEviction: false       # Respeitar PDBs e proteção do Longhorn.
   secrets:
     - name: os-maintenance-shared-scripts
