@@ -85,7 +85,13 @@ kubectl -n NAMESPACE_DO_POD describe pod NOME_DO_POD
 kubectl -n cattle-system describe job NOME_DO_JOB
 ```
 
-O Kubernetes/SUC pode repetir o **mesmo nó**, conforme o backoff configurado no controller. Ele não marca esse nó concluído em uma falha. Corrija o motivo antes de retomar; não exclua PDBs/finalizers nem use `--disable-eviction` para contornar storage. Se o Job ainda estiver tentando, acompanhe a próxima tentativa. Se já falhou definitivamente, após corrigir a causa e confirmar que não há instalação/reboot ativo, exclua somente o Job daquele nó para o SUC recriá-lo. Não é necessário remover ConfigMap nem alterar ambos os Plans apenas para repetir o nó que falhou.
+O Kubernetes/SUC pode repetir o **mesmo nó**, conforme o backoff configurado no controller. Ele não marca esse nó concluído em uma falha. Corrija o motivo antes de retomar; não exclua PDBs/finalizers nem use `--disable-eviction` para contornar storage. Se o Job ainda estiver tentando, acompanhe a próxima tentativa. Se já falhou definitivamente, após corrigir a causa e confirmar que não há instalação/reboot ativo, exclua somente o Job daquele nó e solicite reconciliação do Plan correspondente com os comandos abaixo. A anotação apenas desperta o controller: não é uma trava nem um requisito de preparação. Não é necessário remover ConfigMap ou executar uma nova rodada em todos os nós.
+
+```bash
+kubectl -n cattle-system delete job NOME_DO_JOB --wait=true
+kubectl -n cattle-system annotate plan NOME_DO_PLAN \
+  suc-os.cattle.io/reconcile="$(date -u +%Y%m%dT%H%M%SZ)" --overwrite
+```
 
 Se decidir cancelar a manutenção antes do update, encerre a tentativa antes de executar `kubectl uncordon NOME_DO_NO`. Não faça uncordon durante instalação/reboot.
 
@@ -110,4 +116,14 @@ A estrutura foi comparada com o [exemplo do Matheus Nagata](https://github.com/m
 
 Referências: [ordem prepare/drain/upgrade no SUC](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/pkg/upgrade/job/job.go), [drain do Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/), [manutenção de nós com Longhorn](https://longhorn.io/docs/1.11.2/maintenance/maintenance/).
 
-A validação desta revisão é registrada após os testes. Testes simulados não equivalem a atualização real de pacotes nem comprovam todos os ambientes de cliente.
+Validação em 20/10/2026, usando SUC v0.19.1 e RKE2 v1.35.6:
+
+- **SUSE Linux Micro 6.2:** cinco nós concluíram a rodada pelo Fleet, servidores antes dos workers, sem sobreposição de atualizações no cluster. O drain dos workers aguardou os PDBs do Longhorn; após uncordon, o script aguardou a recuperação dos volumes antes de concluir.
+- **openSUSE Leap 16:** três servidores concluíram a rodada pelo Fleet, sem Longhorn. O código tratou a ausência do CRD normalmente.
+- **Sem updates disponíveis:** transactional-update e Zypper executaram consultas reais, sem novos pacotes. Nenhum dos oito nós reiniciou; os identificadores de boot permaneceram iguais.
+- **Falha por emptyDir:** o drain nativo interrompeu a tentativa, e o container upgrade não iniciou. Depois da autorização de descarte apenas no lab, a tentativa seguinte aceitou o próprio nó já cordonado e concluiu.
+- **Falha por PDB:** um Pod temporário com PDB bloqueando eviction fez o drain repetir as tentativas até o timeout de 20s configurado somente no teste. O container upgrade permaneceu sem iniciar. Os recursos do teste foram removidos e o nó liberado.
+- **Sem trava própria:** nenhum ConfigMap suc-os-maintenance-gate foi criado durante as rodadas. A criação de Jobs suc-os-schedules também foi removida.
+- **Validação local:** sintaxe dos YAMLs e scripts, dry-run na API e cenários simulados de falha de API, cordon, saúde, Longhorn ausente/degradado, falha do gerenciador de pacotes e reboot/retomada dos três perfis.
+
+Os Plans publicados mantêm `deleteEmptydirData: false`. A exceção `true` usada no lab não foi incorporada aos exemplos. Ubuntu teve validação estática e simulada, sem cluster Ubuntu disponível. Instalação de novos pacotes e reboot desta revisão foram simulados; não aconteceram na rodada real porque os nós já estavam atualizados. Esses testes não comprovam todos os ambientes de cliente.
