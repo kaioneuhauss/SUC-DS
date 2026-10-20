@@ -1,303 +1,129 @@
-# Atualização do SO pelo Fleet
+# Atualização do SO pelo Fleet e SUC
 
-O **primeiro deploy já inicia o fluxo completo**. Nas próximas rodadas, basta **alterar `version` e publicar no Git**. Não há ação de preparação separada nem anotação manual nos nós. O Fleet entrega os YAMLs; o SUC atualiza um nó por vez e só libera o próximo depois da recuperação do cluster.
+Fluxo semelhante à manutenção manual: **verificar nós → drain → atualizar o SO → reboot se solicitado → uncordon e recuperação**. O SUC executa um nó por vez; os workers aguardam os servidores da mesma rodada.
 
-| Diretório | Sistema / cluster | Arquivos para operar |
+| Diretório | Sistema | Arquivos |
 |---|---|---|
-| `sle-micro/` | **SLE Micro 6.2**, cluster downstream | `fleet.yaml`, `server-plan.yaml`, `agent-plan.yaml`, `os-upgrade-secret.yaml` |
-| `opensuse-sles/` | **openSUSE Leap / SLES tradicional**, Rancher | `fleet.yaml`, `server-plan.yaml`, `os-upgrade-secret.yaml` |
-| `ubuntu/` | **Ubuntu Server 22.04 / 24.04 LTS**, cluster RKE2 | `fleet.yaml`, `server-plan.yaml`, `agent-plan.yaml`, `os-upgrade-secret.yaml` |
+| `sle-micro/` | SUSE Linux Micro 6.2 | `fleet.yaml`, `server-plan.yaml`, `agent-plan.yaml`, `os-upgrade-secret.yaml` |
+| `opensuse-sles/` | openSUSE Leap / SLES tradicional | `fleet.yaml`, `server-plan.yaml`, `os-upgrade-secret.yaml` |
+| `ubuntu/` | Ubuntu 22.04 / 24.04 | `fleet.yaml`, `server-plan.yaml`, `agent-plan.yaml`, `os-upgrade-secret.yaml` |
 
-São três diretórios independentes, um por família de SO. O mesmo perfil `ubuntu/` atende 22.04 e 24.04; não é necessário duplicá-lo por versão.
+Não há chart próprio, ConfigMap de trava, anotações de preparação, Jobs auxiliares, lista de nomes de nós ou lista de caminhos hostPath. Não são criados nem apagados snapshots etcd. O Micro continua usando os snapshots de SO necessários ao transactional-update.
 
-Cada diretório é independente e tem seu próprio Secret. Configure o GitRepo com **apenas o caminho e o cluster correspondentes**; não aponte para a raiz do repositório nem aplique mais de um perfil no mesmo cluster. O GitRepo do cluster SLE Micro deve acompanhar `sle-micro/`. Os identificadores do bundle e do release usam o nome genérico `suc-os-sle-micro`. Não há chart próprio, gerador ou instalação de Python.
+## Uso direto
 
-**Instalações existentes:** se o bundle ou o release já usa outro nome, planeje a migração antes de publicar estes identificadores genéricos. A troca de nomes não é uma alteração apenas visual e pode recriar recursos no Fleet. Comentários dentro de `stringData` também fazem parte do conteúdo do Secret e sua alteração pode disparar uma nova execução do SUC.
+1. Confira que o cluster tem o **System Upgrade Controller**, o CRD `plans.upgrade.cattle.io` e a ServiceAccount `system-upgrade-controller` em `cattle-system`. Criar os Plans não instala o controller.
+2. Escolha **somente um diretório**, conforme o SO. No Fleet, configure o GitRepo para esse caminho e para o cluster correto. Não aponte para a raiz nem combine perfis no mesmo cluster.
+3. Confira a imagem de ferramentas dos Plans, os seletores de função e `drain.deleteEmptydirData`. O padrão `false` interrompe o drain se houver dados em `emptyDir`; altere para `true` somente quando aceitar descartá-los. PVCs não são apagados por essa opção.
+4. Publique os arquivos no Git. O primeiro deploy já inicia a rodada definida em `version`.
+5. Nas próximas manutenções, altere **somente `version`**, com o mesmo valor nos Plans de servers e agents. Exemplo: `os-20261021-01`. Aguarde uma rodada concluir antes de publicar outra.
 
-Função dos arquivos:
+`version` é um identificador da execução, não a versão de destino do SO. Os comandos instalam os updates dos repositórios configurados no próprio nó; não fazem migração de release.
 
-| Arquivo | Função |
-|---|---|
-| `fleet.yaml` | Namespace e nome do release usado internamente pelo Fleet. |
-| `server-plan.yaml` | Seleciona Linux com label control-plane e atualiza um server por vez. |
-| `agent-plan.yaml` | Seleciona Linux sem control-plane/etcd; espera os servers da mesma rodada. |
-| `os-upgrade-secret.yaml` | Scripts e política em texto legível (`stringData`), sem credenciais. |
+O Secret usa `ignoreUpdates: true`: editar seu conteúdo sozinho **não** dispara outra rodada. Publique alterações de script/imagem/parametrização junto com uma nova `version` quando quiser executá-las. Não troque o script durante uma rodada ativa.
 
-Todos os Plans reutilizam a ServiceAccount `cattle-system/system-upgrade-controller`, já existente. Este projeto não cria Roles, bindings ou outra conta. Os Jobs herdam as permissões dessa conta; confira o RBAC existente, inclusive eventual cluster-admin. O SUC, a conta e as permissões são pré-requisitos para outro cluster.
-
-## Copiar para outro ambiente
-
-Copie o diretório completo do SO escolhido para o Git monitorado pelo Fleet. Antes de publicar o primeiro deploy, confira estes pontos uma vez:
-
-| Conferir | O que ajustar no destino |
-|---|---|
-| Fleet | Caminho de um único perfil e seleção do cluster correto. |
-| RKE2 e SUC | Controller ativo, CRD `Plan`, ServiceAccount existente e permissões para os recursos usados; a política de admissão precisa permitir os Jobs privilegiados. |
-| Imagem | Tag correspondente ao RKE2 e acesso ao registry; ajustar a imagem em cada Plan quando necessário. |
-| Nós e SO | Perfil correto, ferramentas exigidas, repositórios acessíveis, espaço livre e topologia descrita abaixo. Os nomes dos nós são descobertos automaticamente. |
-| Aplicações e dados | Cluster saudável, capacidade para drain, PDBs e volumes aptos à manutenção. `allowEmptyDirDeletion: true` nos exemplos SUSE é uma autorização do lab: use **false** no cliente, salvo autorização específica para descartar esses dados temporários. |
-| Operação | Backup conforme o procedimento do ambiente e nenhuma outra manutenção concorrente. |
-
-Com esses requisitos atendidos, o deploy inicia a rotina e as próximas execuções exigem apenas uma nova `version` (igual nos dois Plans, quando houver server e agent). Não há habilitação manual por anotação. Uma trava `failed` de uma tentativa anterior continua exigindo diagnóstico e liberação consciente; ela não é apagada pela atualização dos arquivos. O teste em um lab confirma o comportamento observado, sem substituir a validação dos requisitos do cliente.
-
-## Snapshots etcd sob controle do operador
-
-Os três perfis **não criam snapshots etcd automaticamente** durante o update do SO. O comando `rke2 etcd-snapshot save` foi retirado dos scripts. A criação do backup fica sob controle do operador, antes da manutenção quando necessário; os snapshots etcd existentes são preservados.
-
-Nos clusters em que o Rancher oferece essa ação, use **Cluster Management → cluster → Snapshots → Snapshot Now** e aguarde a conclusão antes de publicar a rodada. No cluster local/importado sem essa opção, use o procedimento de backup próprio desse cluster. [Snapshots manuais no Rancher](https://ranchermanager.docs.rancher.com/v2.14/how-to-guides/new-user-guides/backup-restore-and-disaster-recovery/back-up-rancher-launched-kubernetes-clusters).
-
-Esta alteração é apenas no procedimento de SO: os agendamentos de snapshots configurados no Rancher/RKE2 continuam independentes. Os snapshots Btrfs usados pelo `transactional-update` no SLE Micro também continuam, pois são parte do mecanismo de atualização do SO, distintos do backup etcd. `--drop-if-no-change` descarta somente o snapshot da transação sem alterações e preserva o comportamento de não reiniciar nesse caso. [Funcionamento do transactional-update no Micro 6.2](https://documentation.suse.com/sle-micro/6.2/html/Micro-transactional-updates/index.html).
-
-## Passo a passo: SLE Micro 6.2
-
-1. No Rancher, confirme os nós Ready e ausência de manutenção em andamento. Se os Plans já existem, aguarde a rodada anterior concluir. O Fleet Ready confirma a entrega dos arquivos, não o término do update.
-2. Configure o GitRepo para `sle-micro/` e o cluster desejado. O primeiro deploy já prepara os agendamentos e inicia a manutenção. Para uma nova rodada, altere `spec.version` em `sle-micro/server-plan.yaml`, por exemplo:
-   ```yaml
-   version: sles-20261019-01
-   ```
-3. Coloque **exatamente o mesmo valor novo** em `sle-micro/agent-plan.yaml`. Use um identificador que nunca foi executado. `sles-20261019-01` é apenas um nome de rodada: não instala uma release específica do SO e não atualiza Kubernetes.
-4. Publique os dois arquivos juntos na branch `main` acompanhada pelo GitRepo configurado para o cluster SLE Micro. Pela interface do GitHub, edite ambos na mesma branch e integre o PR depois das duas alterações. Não faça dois commits separados diretamente em main durante uma rodada.
-5. No Rancher, abra os Pods do namespace `cattle-system`. Leia **prepare** para acompanhar a ordem e a espera dos servers; depois **upgrade** para saúde, drain, atualização e resultado.
-6. Aguarde ambos os Plans Complete=True, nós Ready/sem cordon e ausência da trava `suc-os-maintenance-gate`. Só então inicie outra rodada.
-
-Não é necessário editar scripts, conhecer Bash ou usar Python para esse procedimento. O `transactional-update --non-interactive --drop-if-no-change up` procura as atualizações disponíveis nos repositórios configurados no host. Sem alterações, informa que **não reiniciará** e libera o próximo nó após validar a saúde. O drain ainda pode mover workloads mesmo quando não há pacotes novos.
-
-## Passo a passo: openSUSE Leap / SLES
-
-1. No cluster Rancher, confirme todos os nós Ready, aplicações saudáveis e nenhuma manutenção em andamento.
-2. Abra `opensuse-sles/server-plan.yaml`. O primeiro deploy já executa o fluxo completo; mantenha `PROFILE` em `zypper`.
-3. Altere **somente `version`**, por exemplo `opensuse-20261019-01`, na branch acompanhada pelo GitRepo. Este perfil fornece um Plan para clusters compostos somente de servidores.
-4. Configure o GitRepo para acompanhar somente `opensuse-sles/` e selecionar exclusivamente o cluster desejado. O Plan de SO chama-se `os-maintenance-zypper`; ele é separado de Plans usados para atualizar Kubernetes.
-5. Acompanhe `prepare` e `upgrade` em `cattle-system`. Aguarde o Plan Complete=True, todos os nós Ready/sem cordon e ausência da trava antes de outra rodada.
-
-A versão principal exige todas as aplicações saudáveis. Uma exceção temporária deve ser avaliada pelo operador e mantida fora deste procedimento padrão.
-
-O comando é `zypper --non-interactive patch --with-update --with-interactive`: aplica patches e atualiza os pacotes sem patch correspondente. O retorno 103 indica atualização do próprio gerenciador; o script repete a operação, no máximo três vezes. O retorno 102 indica necessidade de reboot. Falhas de repositório, dependências ou scripts RPM interrompem o procedimento. Não há troca de release, `dist-upgrade`, aceitação forçada de licenças ou desativação de GPG.
-
-O inventário RPM é comparado antes/depois. **Atualizar pacotes não provoca reboot por si só:** o reinício ocorre apenas se `zypper patch` ou `zypper needs-rebooting` retornar **102**. Com pacotes alterados e sem pedido de reboot, registra `updated-no-reboot` e valida o cluster sem reiniciar o nó. Sem alteração e sem reboot pendente, registra `no-change-no-reboot`. Serviços do host podem precisar de reinício conforme os patches; use `zypper ps -s` para avaliar processos que ainda usam arquivos antigos. Um reboot pendente anterior sem atualização nesta rodada exige avaliação, em vez de ser ignorado. Esse perfil aceita SLES e openSUSE **Leap** com raiz gravável; rejeita Micro transacional e Tumbleweed.
-
-## Passo a passo: Ubuntu Server 22.04 e 24.04
-
-Este perfil atualiza pacotes **dentro da release instalada**. Não migra de Ubuntu 22.04 para 24.04, não muda repositórios e não instala/atualiza RKE2 por conta própria. Exige RKE2, SUC e a ServiceAccount existente, assim como os outros perfis. A seleção automática atende clusters Ubuntu; não é um exemplo para misturar perfis de SO no mesmo cluster.
-
-1. Confira backup manual, saúde, capacidade, repositórios e a tag RKE2 dos dois Plans. Os nós precisam de `apt-get`, `dpkg`, `needrestart`, `update-notifier-common` e `fuser` (pacote `psmisc`), além das ferramentas básicas verificadas pelo script. A checagem bloqueia se faltar alguma ferramenta, houver dpkg incompleto, processo usando locks, reboot anterior pendente ou pouco espaço. Não apaga locks nem tenta reparar pacotes automaticamente.
-2. No Fleet, configure o GitRepo para **somente `ubuntu/`**, a branch desejada e o cluster Ubuntu correspondente. Não selecione a raiz do repositório. Mantenha os dois Plans com a mesma `version`.
-3. Publique os arquivos. O primeiro deploy prepara os agendamentos automaticamente em todos os nós e inicia a atualização; não há troca de ACTION nem anotação manual.
-4. Acompanhe `prepare` e `upgrade` no Rancher. O fluxo é: ordem → trava → agendamentos → saúde → drain → APT → reboot **somente se solicitado** → validação → próximo nó.
-5. Nas rodadas seguintes, altere apenas **`version` nos dois Plans**, com o mesmo novo valor. Aguarde ambos Complete=True, nós Ready/sem cordon e trava ausente antes de outra rodada. `Fleet Ready` confirma entrega, não conclusão da manutenção.
-
-No Ubuntu, `allowEmptyDirDeletion` começa em **false**: o descarte autorizado para os outros labs não vale automaticamente neste cluster. Se o drain bloquear por `emptyDir`, avalie os dados indicados antes de autorizar uma exceção. Longhorn continua opcional; volumes locais e backends não revisados bloqueiam.
-
-| Comando / parâmetro Ubuntu | Função |
-|---|---|
-| `apt-get -o APT::Update::Error-Mode=any update` | Atualiza os índices; falha de repositório, inclusive transitória, interrompe o fluxo. |
-| `apt-get check` e `dpkg --audit` | Verificam dependências e instalações incompletas; não executam recuperação automática. |
-| `upgrade --with-new-pkgs --no-remove` | Atualiza pacotes, permitindo novas dependências, sem remover pacotes. Mantém holds e políticas de phased updates. |
-| `--assume-yes` / `DEBIAN_FRONTEND=noninteractive` | Execução sem perguntas. Erros continuam bloqueando a manutenção. |
-| `--force-confold` / `UCF_FORCE_CONFFOLD=1` | Preservam configurações locais em conflitos; revisar depois arquivos `.dpkg-dist`/equivalentes. Não desativam assinaturas ou validação de dependências. |
-| `DPkg::Lock::Timeout=60` | Aguarda até 60 s por lock nas operações de pacotes. Não remove locks nem encerra quem os mantém. |
-| `NEEDRESTART_MODE=a` / `needrestart -r a` | Tratam reinícios de serviços dentro da manutenção do nó. Reinício de serviço é diferente de reboot do SO. |
-| `/run/reboot-required` | Indicação usada para reiniciar o Ubuntu após alteração de pacotes; o helper de `update-notifier-common` é obrigatório. Os pacotes indicados em `.pkgs` aparecem no log, quando disponíveis. |
-
-O script compara o inventário dpkg antes/depois. Sem alterações: `no-change-no-reboot`. Com alterações e sem solicitação de reboot: `updated-no-reboot`. Com alterações e `/run/reboot-required`: `updated-and-rebooted`, confirmado pelo boot ID. Um reboot já pendente antes da rodada bloqueia para avaliação; não é atribuído à atualização atual. A saída APT informa pacotes retidos; nenhuma alteração de inventário não significa que todo pacote existente no repositório possa ser instalado.
-
-A preparação dos agendamentos permanece aplicada após uma falha. O estado inicial está em `/var/lib/suc-os/automatic-units-before.txt`; se já havia o drop-in gerenciado, sua cópia fica em `apt-periodic-before.conf`. Para voltar ao agendamento anterior, termine a manutenção, restaure/remova somente esse drop-in conforme o estado inicial e reative os timers que estavam habilitados. Não deixe APT automático concorrendo com outra rodada SUC.
-
-[APT Ubuntu 22.04](https://manpages.ubuntu.com/manpages/jammy/man8/apt-get.8.html), [APT Ubuntu 24.04](https://manpages.ubuntu.com/manpages/noble/man8/apt-get.8.html), [dpkg](https://manpages.ubuntu.com/manpages/noble/man1/dpkg.1.html) e [atualizações automáticas no Ubuntu](https://ubuntu.com/server/docs/how-to/software/automatic-updates/).
-
-## Quando cada perfil reinicia
-
-| Perfil | Condição de reboot |
-|---|---|
-| SLE Micro 6.2 | Nova raiz transacional preparada ou snapshot anteriormente pendente autorizado. A ativação dessa raiz exige reboot. |
-| openSUSE Leap / SLES | Pacotes alterados e indicação 102 de `patch` ou `needs-rebooting`. |
-| Ubuntu 22.04 / 24.04 | Pacotes alterados e `/run/reboot-required`. |
-
-Sem alterações, nenhum perfil solicita reboot. Falha interrompe a sequência e mantém a trava; não desfaz pacotes já instalados. Os perfis tradicionais podem reiniciar serviços durante a instalação sem reiniciar o SO.
-
-## Imagem: quando alterar
-
-A imagem está por tag, sem `@sha256`. Para RKE2 `v1.35.6+rke2r1`, usamos:
-
-```yaml
-image: &maintenance_image registry.rancher.com/rancher/rke2-upgrade:v1.35.6-rke2r1
-```
-
-`&maintenance_image` dá um nome a esse valor; `image: *maintenance_image` no upgrade reutiliza a mesma imagem. Assim, há **uma tag para editar em cada Plan**. Quando atualizar o RKE2 pelo Rancher, revise a tag correspondente nos dois arquivos, confirme que ela existe no registry e publique com uma nova `version`, numa janela de manutenção. Não use `latest`.
-
-Essa é a imagem de ferramentas de upgrade do RKE2, não a imagem do kube-apiserver. O `command` dos Plans executa nossos scripts de SO em vez do upgrade do RKE2. O script verifica a compatibilidade do kubectl com a API (no máximo uma versão minor de diferença), além das ferramentas necessárias. A correspondência de tag deve ser revista após cada upgrade do cluster; não é uma garantia para toda versão futura. Sem digest, o conteúdo depende da tag publicada no registry.
-
-No SUSE Linux Micro 6.2, `PRETTY_NAME` pode informar `SUSE Linux Enterprise Server 16.0` por compatibilidade. O perfil valida `VARIANT_ID=transactional`, `SUSE_SUPPORT_PRODUCT=SUSE Linux Micro` e versão do produto `6.2` (ou o ID Micro equivalente). O log usa `SUSE_PRETTY_NAME` para mostrar o produto validado e informa o atualizador `transactional-update`; a escolha do comando não depende de `PRETTY_NAME`. O perfil tradicional rejeita esse host transacional. [Identificação oficial dos produtos SUSE](https://documentation.suse.com/sles/16.0/html/SLE-os-identification/index.html).
-
-## Seleção e descoberta dos nós
-
-Não há nomes de hosts nos Plans. O Kubernetes fornece os nomes e labels pela API:
-
-- Server: Linux com `node-role.kubernetes.io/control-plane`.
-- Worker: Linux sem `node-role.kubernetes.io/control-plane` e sem `node-role.kubernetes.io/etcd`.
-- A saúde considera todos os nós encontrados, inclusive os do outro grupo. A lista fica fixa durante o Job e é gravada na trava para sobreviver a reboot. Se a lista mudar durante esse Job, o avanço bloqueia.
-
-O exemplo destina-se ao cluster Linux com control-plane e etcd juntos. Um nó somente etcd bloqueia para revisão da ordem; não é tratado como worker. A descoberta não identifica um nó removido da API antes de a rodada começar: confira a topologia esperada no Rancher antes de publicar.
-
-Um nó Linux novo passa a ser selecionado automaticamente. A preparação dos agendamentos desse nó ocorre automaticamente antes do drain da rodada. Não é necessário atualizar uma lista de nomes.
-
-## Por que o drain está no script?
-
-O SUC **já oferece drain nativo**. A ordem oficial é `prepare → drain → upgrade`, e o controller faz uncordon quando o Job termina. Um procedimento que não precisa retomar uma transação após reboot pode usar essa opção diretamente. [API do Plan](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/doc/plan.md).
-
-Neste procedimento, o Job pode precisar de um novo pod após o reboot. O pod novo executa seus init containers novamente; o drain nativo seria repetido antes de chegar à verificação do resultado. Aqui, a fase persistida permite retomar a transação sem repetir drain nem atualização. O script também libera o agendamento **antes** da checagem final, para permitir que aplicações e réplicas Longhorn se recuperem, mantendo a trava até confirmar a saúde. [Init containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/) e [implementação do drain no SUC](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/pkg/upgrade/job/job.go#L327-L441).
-
-O drain continua sendo o **`kubectl drain` padrão**, com PDBs, timeout e encerramento normal dos pods. Não foi reimplementado um mecanismo de evacuação. O script acrescenta validação de volumes, retomada e mensagens de falha. Não configure `spec.drain` junto com ele: isso executaria a etapa duas vezes.
-
-- `force: true` permite remover pods sem controlador; não é necessário neste exemplo e não ignora PDBs.
-- `deleteLocalData: true` / `deleteEmptydirData: true` autorizam perder dados de `emptyDir`; não são uma proteção para volumes locais.
-- `jobActiveDeadlineSecs: 0` remove o limite do Job. Aqui há limites para encerrar a espera e exigir diagnóstico, preservando uma transação de pacotes já iniciada no host.
-- Uma busca por `NotReady` no texto de `kubectl get nodes` não trata falha da API com segurança. As checagens deste projeto exigem respostas válidas e condições explícitas.
-
-A simplificação desta revisão elimina as duas verificações de saúde repetidas antes do drain e um marcador de estado sem uso. Permanecem uma checagem antes da manutenção e outra após a recuperação. O uso normal continua sendo publicar o diretório completo e, nas próximas rodadas, alterar apenas `version`.
-
-## O que acontece em cada etapa
-
-1. **prepare:** organiza a ordem; nos workers, descobre e espera todos os servers na mesma version/hash. Não altera o host nem repete a checagem de saúde.
-2. **upgrade / trava:** descobre os nós, reserva a manutenção para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, bloqueia outros Jobs de manutenção conflitantes e prepara automaticamente os agendamentos de todos os destinos. Em seguida, exige 60 segundos contínuos de saúde: API, Ready, pressão, cordon, heartbeats, workloads e Longhorn quando presente. Essa validação ocorre uma vez, imediatamente antes do drain.
-3. **upgrade / drain:** faz cordon, verifica volumes e evacua workloads respeitando PDBs. Não usa force nem remove finalizers. O drain está no script para não ser repetido automaticamente após reboot.
-4. **upgrade / SO:** informa que o backup etcd fica sob controle do operador e executa a transação no systemd do host. A saída aparece no log do container e fica persistida no host. Sem alterações, não há reboot.
-5. **upgrade / validação:** quando houve reboot, confere boot ID e, no Micro, o snapshot ativo. Espera RKE2 ativo, faz uncordon, aguarda recuperação dos workloads/volumes por 60 segundos e só então libera a trava.
-
-Os logs agrupam o fluxo em **Etapa 1 de 6 até Etapa 6 de 6**: azul em negrito para etapas/informações, verde para sucesso, amarelo para espera/atenção e vermelho em negrito para erro/interrupção. As cores usam ANSI; os rótulos continuam informativos sem cor. Para um exportador sem ANSI, use LOG_COLOR=false ou NO_COLOR=1 no container. O nó e a rodada aparecem no início; o container é selecionado no Rancher, sem repetir um prefixo longo em cada linha. Na espera, o resumo muda quando há progresso; sem mudança, há apenas um lembrete a cada dois minutos.
-
-```text
-Etapa 1 de 6 — Preparar a atualização
-[AGUARDANDO] Servidores concluídos: 1 de 3. Em atualização: server-02.
-Faltam: server-01, server-02.
-
-Etapa 6 de 6 — Concluir a manutenção deste nó
-[CONCLUIDO] Não havia atualizações disponíveis. Este nó não foi reiniciado. O cluster está saudável; o próximo nó já pode começar.
-```
-
-Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquele Pod não executará novas etapas, e `[COMO CORRIGIR]` orienta o diagnóstico. Falha fatal no prepare tenta registrar a mesma trava global em failed, sem sobrescrever uma manutenção existente. O upgrade preserva a trava em failed, inclusive em falha da preparação automática dos agendamentos. O SUC pode recriar o Pod, mas uma trava em failed impede que essa repetição pule a falha. Se a API estiver indisponível, o log informa que não foi possível confirmar a gravação da trava; confira seu estado. Uma trava já existente em updating/verifying, com o mesmo nó e hash, permite retomar a transação persistida após reboot. Um worker também interrompe a espera se encontrar a trava em failed.
-
-**Interromper o procedimento não é desfazer pacotes já instalados nem matar uma transação ativa.** Se o systemd ainda estiver executando a transação, o log avisa para verificar seu resultado antes de qualquer recuperação. Isso evita interromper escrita de pacotes à força.
-
-`Init:0/1` significa que o prepare está em execução. Seus logs mostram o motivo, os servers pendentes, o progresso e o tempo restante. No reboot, o pod original pode ficar Unknown/Failed e outro pod do **mesmo Job** retoma a validação; isso não repete a transação. O TTL configurado no controller limpa Jobs concluídos e seus pods. Não apague pods ativos apenas para limpar a tela.
-
-## Parâmetros dos YAMLs
+## Parâmetros dos Plans
 
 | Parâmetro | Função |
 |---|---|
-| `version` | Identificador único da rodada; único ajuste habitual, igual nos dois Plans do Micro; apenas um Plan no Rancher. |
-| `concurrency: 1` | Um nó por vez dentro de cada Plan. Espera dos servers + trava global impedem manutenção simultânea entre grupos. |
-| `exclusive: true` | Exclusividade por nó; não é uma trava global entre Plans. |
-| `jobActiveDeadlineSecs` | Limite total do Job: 18000 s nos servers; 86400 s nos workers, incluindo a espera inicial. |
-| `postCompleteDelay: 30s` | Intervalo adicional depois de cada sucesso. |
-| `serviceAccountName` | Conta existente usada para consultar e operar a API. |
-| `nodeSelector` / `tolerations` | Escolhem os papéis Linux e permitem execução em masters com taints e retomada após cordon. |
-| `prepare` / `upgrade` | Container que organiza a ordem e container que valida a saúde e executa a manutenção. |
-| `image` / `command` / `args` | Imagem de ferramentas, interpretador Bash e script a executar. |
-| `securityContext` | Root e privilégio para o container upgrade operar o host montado em /host pelo SUC. |
-| `secrets` | Monta o código compartilhado em /run/suc-os. |
-| `PROFILE` | `micro62`, `zypper` ou `ubuntu`, conforme o diretório. O script verifica o SO real antes de operar o host. |
-| `SERVER_PLAN` | Nome do Plan dos servers que o prepare do worker deve esperar. |
-| `PEER_PLAN` | Plan parceiro permitido; outros Jobs SUC ativos bloqueiam. |
-| `upgrade.cattle.io/digest` | Acrescenta imagem/envs/prepare ao cálculo de execução. Version, conta e conteúdo do Secret já entram no hash padrão. |
-| `name` no `sle-micro/fleet.yaml` | Define o identificador genérico do bundle: `suc-os-sle-micro`. Não muda o caminho usado no GitRepo. |
-| `defaultNamespace` / `helm.releaseName` | Namespace e identificação interna do release Fleet; não exigem Chart.yaml ou values. |
+| `concurrency: 1` | Um nó em execução por Plan. A espera dos workers pelos servidores mantém a ordem entre os dois Plans. |
+| `exclusive: true` | Evita outro Plan exclusivo simultâneo no mesmo nó; não é uma trava global. |
+| `jobActiveDeadlineSecs: 0` | Não mata uma instalação de pacotes por um limite total de Job. Drain e espera de saúde têm limites próprios. |
+| `postCompleteDelay: 30s` | Pausa adicional entre os nós. |
+| `serviceAccountName` | Usa a conta existente do SUC. Ela precisa das permissões de leitura e drain/uncordon necessárias; não são criados novos RBACs. |
+| `nodeSelector` | Descobre servidores por `control-plane`; workers não têm `control-plane` nem `etcd`. Ajuste apenas se a topologia usar outros papéis. |
+| `tolerations` | Permite executar nos servidores com taints e em nós cordonados. |
+| `cordon` / `drain` | O próprio SUC cria o init container `drain`; o update só inicia depois de seu sucesso. |
+| `drain.timeout: 15m` | Tempo máximo de cada tentativa de drain. |
+| `drain.ignoreDaemonSets: true` | DaemonSets não são removidos pelo drain. |
+| `drain.force: false` | Não força remoção de Pods sem controlador. |
+| `drain.deleteEmptydirData: false` | Exige decisão explícita antes de descartar dados temporários de Pods. |
+| `drain.disableEviction: false` | Mantém PDBs e o mecanismo de eviction. |
+| `secrets.path` | Monta os scripts em `/run/suc-os`. `stringData` permite editá-los como texto. |
+| `secrets.ignoreUpdates: true` | Mantém o disparo sob controle de `version`, em vez de disparar por qualquer edição do Secret. |
+| `prepare.image` / `upgrade.image` | Imagem de ferramentas com Bash, kubectl e jq; não executa upgrade do Kubernetes. A âncora `&tools` e `*tools` reutilizam a mesma imagem. |
+| `SERVER_PLAN` | Somente no agent: nome do Plan de servidores que precisa concluir a mesma versão. |
+| `privileged` / `runAsUser: 0` | Permitem executar o gerenciador de pacotes e o reboot no host via `chroot /host`. |
 
-A mudança da `version` dispara uma execução mesmo mantendo imagem e Secret iguais. **Mudanças de scripts, imagem, conta ou parâmetros também podem disparar execução.** Publique-as com uma nova version, igual nos dois Plans, somente depois de concluir a rodada anterior.
+A imagem do init container `drain` é definida na configuração do **controller** (`SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE`); ela não é a imagem de ferramentas do Plan. Ambas precisam fornecer kubectl compatível com a API do cluster.
 
-## Scripts legíveis no Secret
+## Scripts dentro do Secret
 
-`stringData` contém texto normal; a conversão interna em `data`/base64 é feita pelo Kubernetes. Base64 não é criptografia. O Secret foi mantido porque o SUC monta scripts por esse mecanismo; não há credenciais nele. Não precisa extrair, decodificar ou regenerar nada para editar.
+São quatro blocos pequenos, dentro de um único YAML:
 
-| Chave | O que faz |
-|---|---|
-| `prepare.sh` | Organiza a ordem; workers aguardam todos os servers da mesma rodada. |
-| `run.sh` | Organiza a manutenção e acompanha o processo do host. |
-| `common.sh` | Logs, API, descoberta de nós, trava e valores padrão. |
-| `wait-servers.sh` | Espera a conclusão da mesma rodada em todos os servers. |
-| `health.sh` | Valida nós, heartbeats, workloads e Longhorn opcional. |
-| `automatic.sh` | Prepara os agendamentos em todos os nós com Jobs temporários, antes do primeiro drain; reutiliza os concluídos na mesma rodada. |
-| `host-automatic.sh` | Desativa agendamentos conhecidos, preserva o estado original e bloqueia se houver transação/reboot em andamento. |
-| `host-preflight.sh` | Confere SO, ferramentas, systemd e pelo menos 2 GiB livres em / e /var. Ubuntu exige também 200 MiB em /boot e 50 MiB em /boot/efi quando forem partições separadas. |
-| `host-worker.sh` | Executa somente o gerenciador do SO daquele diretório; persiste resultado e reinicia apenas quando necessário. |
-| `storage-guard.jq` / `policy.json` | Verificam os volumes e as exceções autorizadas. |
+- `common.sh`: logs coloridos, consulta de nós e recuperação do Longhorn quando instalado. Falha de API é tratada como erro; ausência de Longhorn é normal.
+- `prepare.sh`: nos workers, espera o Plan de servidores; depois verifica nós `Ready`, pressão e cordon dos outros nós. O cordon do próprio nó não bloqueia a retomada. Não escreve objetos Kubernetes.
+- `upgrade.sh`: só é iniciado após o drain nativo. Executa o script do SO no host, faz uncordon e espera a recuperação antes de concluir o Job.
+- `host-update.sh`: identifica o SO, executa seu gerenciador de pacotes e reinicia apenas quando necessário. Um pequeno registro em `/var/lib/suc-os-simple/HASH/` permite retomar após reboot sem instalar tudo novamente; não é uma trava e não precisa ser excluído para operar uma nova versão.
 
-Em Bash, `#` inicia comentário, `source` carrega funções de outro script e `${VAR:-padrao}` usa o padrão quando a variável não foi definida. `set -Eeuo pipefail` faz o fluxo parar em falhas/variáveis obrigatórias ausentes; `trap` registra a interrupção. Não é necessário mudar essas instruções no uso normal.
+Os limites opcionais de `common.sh` são `HEALTH_TIMEOUT=900` (15 minutos), `STABLE_SECONDS=30` (saúde contínua), `POLL_SECONDS=10` e `LOG_COLOR=true`. O worker espera servidores por até `SERVER_WAIT_TIMEOUT=43200` (12 horas). São variáveis de ambiente do container correspondente; normalmente não precisam mudar.
 
-Os padrões avançados estão comentados no começo de `common.sh`:
+| Perfil | Atualização | Pedido de reboot |
+|---|---|---|
+| Micro | `transactional-update --non-interactive --drop-if-no-change up` | Uma nova raiz Btrfs precisa ser ativada. Sem alteração, não reinicia. Se já houver snapshot pendente, ativa-o primeiro e informa que uma nova consulta de pacotes fica para outra rodada. |
+| openSUSE/SLES | `zypper --non-interactive refresh` e `zypper --non-interactive update` | Retorno 102 do Zypper/`needs-rebooting`. Outros erros interrompem; não é feita busca por palavras como `kernel` na saída. |
+| Ubuntu | `apt-get update` e `apt-get --assume-yes --with-new-pkgs --no-remove upgrade` | `/run/reboot-required`. Preserva arquivos locais de configuração e não permite remoção automática de pacotes. |
 
-| Variável | Padrão e função |
-|---|---|
-| `PLAN_NAMESPACE` | Descoberto pela credencial projetada da ServiceAccount. |
-| `LH_NAMESPACE` | `longhorn-system`; ajuste apenas se o Longhorn estiver em outro namespace. |
-| `HEALTH_TIMEOUT` / `STABLE_SECONDS` | Até 1800 s esperando saúde; exige 60 s contínuos saudáveis. |
-| `DRAIN_TIMEOUT` / `HOST_TIMEOUT` | 30 min para drain e 7200 s de espera pela transação, com margem de 600 s no acompanhamento. Timeout bloqueia a fila; não mata o APT/Zypper/transactional-update. |
-| `WAIT_TIMEOUT` | Até 43200 s aguardando os servers. |
-| `ACTIVATE_PENDING` | Apenas Micro, `true`: ativa snapshot pendente após drain; uma nova transação fica para a próxima rodada. |
+Um pedido de reboot que já estava pendente também é atendido depois do drain. Durante o reboot, o Pod pode terminar e o Job criar outro: o registro local confirma a mudança do boot antes de concluir. Com drain nativo, uma nova tentativa de Pod passa novamente por `prepare` e `drain`; não repete a instalação já registrada.
 
-`NODE`, `PLAN`, `HASH` e a version são fornecidos pelo SUC ao Job. `EXPECTED_NODES` e `SERVER_NODES` vêm da descoberta na API; não são parâmetros para preencher. `STATE` guarda o resultado em `/var/lib/suc-os/HASH` no host. A trava `suc-os-maintenance-gate` não expira automaticamente: uma falha não autoriza o próximo nó.
-
-## Agendamentos automáticos e volumes
-
-O primeiro deploy já inicia a atualização. Não existe mais a rodada `prepare-host`, o parâmetro `ACTION` nos Plans ou a exigência da anotação `suc-os.cattle.io/automatic-updates=disabled`. Anotações antigas não liberam nem bloqueiam a rotina.
-
-Antes do primeiro drain, o script prepara **todos os destinos**, um por vez, com Jobs temporários `suc-os-schedules-*`. Eles usam a imagem e a ServiceAccount do Plan, sem token de API montado no container. Executam somente as verificações do host e o ajuste dos agendamentos: não fazem drain, não instalam pacotes e não reiniciam. Falha em qualquer destino bloqueia o fluxo inteiro antes do drain. Os Jobs concluídos são reutilizados pela mesma rodada e removidos pelo TTL após 24 horas; uma nova `version`, mudança desses scripts/imagem ou troca do UID de um nó exige nova preparação. Não é necessário criar outro YAML.
-
-O drain pode remover o Pod de preparação já concluído. O Job permanece com `Complete=True` para registrar o resultado; isso não representa uma preparação pendente. Os logs desse Pod podem deixar de estar disponíveis após sua remoção.
-
-- **SUSE:** verifica/desativa `transactional-update.timer`, `os-update.timer` e `rebootmgr.service`, quando existem. Uma transação automática ou gerenciador de pacotes ativo bloqueia; seus processos não são encerrados.
-- **Ubuntu:** verifica/desativa `apt-daily.timer` e `apt-daily-upgrade.timer` e grava `/etc/apt/apt.conf.d/99-suc-os-periodic`, desativando APT periódico e reboot automático. Serviços ativos, locks ocupados e reboot anterior pendente bloqueiam.
-
-A alteração dos agendamentos é persistente, inclusive após falha. O estado original fica em `/var/lib/suc-os/automatic-units-before.txt`; no Ubuntu, um drop-in anterior é preservado em `apt-periodic-before.conf`. Para voltar à automação anterior, primeiro conclua a manutenção SUC, restaure o drop-in quando aplicável e reative somente as unidades que estavam habilitadas. O gerenciador de pacotes manual/SUC continua disponível. [Timers no SUSE Micro](https://documentation.suse.com/sle-micro/6.2/html/Micro-transactional-updates/index.html) e [atualizações automáticas no Ubuntu](https://ubuntu.com/server/docs/how-to/software/automatic-updates/).
-
-Agendamentos externos, como automações de administração, cron próprio e outros Plans de upgrade, também não devem iniciar manutenção concorrente. Esses mecanismos personalizados não são removidos pelo script. Antes do deploy, revise SO, registro/repositórios, backup manual, imagem, conta e política de volumes.
-
-**Migração de uma tentativa já bloqueada:** publique Secret e Plans juntos. A trava antiga em `failed` é preservada; retirar a exigência da anotação não autoriza apagar uma falha de origem desconhecida. Confirme nos logs que a falha antiga ocorreu antes do drain/update, interrompa as tentativas antigas desses Plans e então trate a trava. Não marque nós como preparados manualmente. Um Plan antigo ainda com `ACTION=prepare-host` é recusado para não transformar uma preparação em atualização silenciosamente.
-
-Longhorn é opcional. Sem API/volumes Longhorn, a validação segue com PDBs e proteção dos demais volumes. Erro de consulta/permissão bloqueia; não é interpretado como ausência. Com Longhorn, exige saúde/redundância e protege a última réplica; espera reconstruções antes de avançar.
-
-PVC local, hostPath de aplicação e CSI não revisado bloqueiam antes do drain. Isso exige avaliar o backend e o workload, não apagar volume/finalizer. Em `policy.json`, `allowEmptyDirDeletion: true` foi autorizado para os dados temporários dos laboratórios SLE Micro e Rancher, incluindo filas de telemetria do Rancher; use false sem essa autorização. `hostPathAllowlist` contém exceções específicas de infraestrutura (no Rancher, diretórios de certificados do controller SUC, identificados por namespace/ServiceAccount/owner/path); `remoteCSIDrivers` aceita apenas backends remotos previamente revisados. PDBs, falha de saúde, espaço, repositório ou compatibilidade também podem bloquear: o bloqueio não significa necessariamente corrupção de dados.
-
-### DNS e dependências
-
-Valide resolução de nomes e disponibilidade dos serviços usados pelo cluster antes da manutenção. Falhas de DNS ou aplicações indisponíveis bloqueiam o avanço. Ajustes de infraestrutura devem seguir o ambiente de destino; este procedimento não fornece IPs ou domínios internos como padrão.
-
-## Diagnóstico opcional por terminal
-
-A rotina pode ser acompanhada no Rancher. Para quem preferir terminal, usando o kubeconfig do cluster de destino:
+## Acompanhar e tratar uma falha
 
 ```bash
 kubectl -n cattle-system get plans
 kubectl -n cattle-system get pods -l upgrade.cattle.io/plan -o wide
-kubectl get nodes
-kubectl -n cattle-system get cm suc-os-maintenance-gate --ignore-not-found
-# Substitua NOME_DO_POD pelo nome mostrado acima.
-kubectl -n cattle-system logs NOME_DO_POD -c prepare -f
+kubectl -n cattle-system logs NOME_DO_POD -c prepare
+kubectl -n cattle-system logs NOME_DO_POD -c drain
 kubectl -n cattle-system logs NOME_DO_POD -c upgrade -f
 ```
 
-Em erro, leia a mensagem `[ERRO]`/`[ACAO NECESSARIA]`, a trava e, no host envolvido, `journalctl -u suc-os-HASH.service` e `/var/lib/suc-os/HASH/operation.log`. Corrija a causa; confirme que não há transação/reboot ativo e que o nó/volumes estão recuperados antes de qualquer liberação manual. Não apague a trava para pular uma falha. Snapshot local etcd não substitui backup externo.
+Se o `drain` falhar, **o gerenciador de pacotes não é iniciado**. O nó permanece cordonado. Leia o Pod/PDB apontado pelo kubectl e corrija a causa, como falta de capacidade, Pod em encerramento, réplica Longhorn indisponível ou emptyDir sem autorização de descarte:
 
-## Revisão do código e limites de segurança
+```bash
+kubectl get pods -A --field-selector spec.nodeName=NOME_DO_NO -o wide
+kubectl get pdb -A
+kubectl -n NAMESPACE_DO_POD describe pod NOME_DO_POD
+kubectl -n cattle-system describe job NOME_DO_JOB
+```
 
-A serialização, a trava persistente, os PDBs, a proteção dos volumes e a confirmação de saúde são necessárias para este procedimento. `concurrency: 1` sozinho não coordena dois Plans, e `exclusive` protege a execução por nó; por isso a trava global foi mantida. O drain dentro do script permite reconhecer retomada sem repetir uma transação depois do reboot.
+O Kubernetes/SUC pode repetir o **mesmo nó**, conforme o backoff configurado no controller. Ele não marca esse nó concluído em uma falha. Corrija o motivo antes de retomar; não exclua PDBs/finalizers nem use `--disable-eviction` para contornar storage. Se o Job ainda estiver tentando, acompanhe a próxima tentativa. Se já falhou definitivamente, após corrigir a causa e confirmar que não há instalação/reboot ativo, exclua somente o Job daquele nó e solicite reconciliação do Plan correspondente com os comandos abaixo. A anotação apenas desperta o controller: não é uma trava nem um requisito de preparação. Não é necessário remover ConfigMap ou executar uma nova rodada em todos os nós.
 
-Na revisão de 19/10/2026, foram removidos os executores de outros sistemas de cada Secret: o Micro contém transactional-update; o tradicional, Zypper; Ubuntu, APT. Os YAMLs seguem independentes, sem chart, gerador ou runtime adicional. Parte do código de segurança é repetida intencionalmente para permitir instalar cada diretório sozinho; mudanças nessa parte precisam ser verificadas nos três perfis.
+```bash
+kubectl -n cattle-system delete job NOME_DO_JOB --wait=true
+kubectl -n cattle-system annotate plan NOME_DO_PLAN \
+  suc-os.cattle.io/reconcile="$(date -u +%Y%m%dT%H%M%SZ)" --overwrite
+```
 
-Também foram corrigidos dois pontos: `TimeoutStartSec=infinity` impede que o limite de uma unidade oneshot mate a transação de pacotes; o Pod continua com timeout e mantém a fila bloqueada para diagnóstico. E tipos de volume inline não reconhecidos passaram a bloquear, em vez de serem aceitos pelo caso padrão. [Semântica de timeout do systemd](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#TimeoutStartSec=).
+Se decidir cancelar a manutenção antes do update, encerre a tentativa antes de executar `kubectl uncordon NOME_DO_NO`. Não faça uncordon durante instalação/reboot.
 
-Isso é um procedimento próprio, não uma certificação de compatibilidade de qualquer SO/kernel/pacote com RKE2. A conta existente permanece com as permissões que já possui; revise esse acesso antes de usar em outro cluster. `allowEmptyDirDeletion: true` dos perfis SUSE é uma autorização de lab, não um padrão recomendado para outros clusters. Os limites de tempo e espaço são mínimos operacionais e precisam comportar o tamanho real do ambiente.
+## Volumes e limites do procedimento
 
-## Validação e limites
+O drain nativo é a fonte da decisão de evacuação, como num procedimento manual. O Longhorn precisa estar configurado com sua política de drain e PDBs; no lab foi conferido `node-drain-policy=block-if-contains-last-replica`. **Não há lista própria de hostPath:** `/var/lib/longhorn/metadata` não recebe tratamento especial nem produz o erro da implementação anterior.
 
-- Simplificação do drain (19/10/2026): 43 testes locais aprovados. Os novos cenários executam o fluxo com comandos simulados e verificam falha de saúde antes do cordon, falha de drain sem update/uncordon, volume local bloqueado, retomada sem segundo drain/transação e rejeição de rollback inesperado no Micro.
+`kubectl drain` não é um validador universal de dados: um PVC local/hostPath de aplicação pode ser evicto e ficar Pending em outro nó; isso não prova portabilidade nem garante proteção contra corrupção. Dados locais persistentes exigem a estratégia da aplicação/storage, assim como na manutenção manual. `emptyDir` só é descartado com a opção explícita do Plan. Nenhum comando deste procedimento apaga PVCs.
 
-- Fluxo único (19/10/2026): 37 testes locais aprovados e sintaxe de 27 scripts Bash verificada. A validação cobre o primeiro deploy sem anotações, preparação em todos os nós antes do drain, repetição idempotente, falhas de serviços/reboot/locks e preservação da trava. Resultados e limites da execução real são informados separadamente.
+A verificação final exige nós saudáveis e Longhorn recuperado quando instalado. Ela não exige todas as aplicações do cluster prontas nem interfere em serviços externos desligados. Coordene a janela com updates/reboots automáticos do SO, upgrades de Kubernetes/Rancher e backups: este fluxo não cria Jobs para desativar serviços de outros nós. No lab, os agendamentos automáticos já estavam desativados pelo procedimento anterior.
 
-- Revisão de 19/10/2026: 25 testes locais com comandos simulados, além da leitura de 11 YAMLs e verificação de sintaxe de 21 scripts Bash. Cobrem Ubuntu 22.04/24.04 com e sem pedido de reboot, falhas APT/dpkg, Zypper, Micro, storage, saúde e retomada.
-- Validação real do fluxo automático em 19/10/2026, pelo Fleet: três servidores e dois workers SLE Micro 6.2 concluíram em série, sem sobreposição dos containers de upgrade. Ambos os Plans terminaram `Complete=True`, todos os nós Ready/sem cordon e a trava foi liberada. Os dois volumes Longhorn terminaram saudáveis, cada um com pelo menos duas réplicas RW; aplicações recuperadas. O fluxo respeitou um bloqueio temporário de PDB e aguardou a recuperação dos volumes. Não havia pacotes novos: cinco resultados `no-change-no-reboot`, confirmados pelo boot ID inalterado. Essa rodada não exercitou instalação de novos pacotes nem reboot.
-- As alterações atuais de openSUSE/SLES e Ubuntu passaram pelos testes locais; não foram executadas em nós desses sistemas nesta revisão. A primeira execução precisa ser validada no cluster selecionado.
-- Testes reais anteriores em SLE Micro e openSUSE não homologam automaticamente as alterações atuais nem todas as versões de SLES.
-- Os testes de desenvolvimento ficam fora dos diretórios entregues pelo Fleet; não são necessários para operar os Plans.
+## Migrar da versão anterior
 
-Referências: [SUC 0.19.1](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/doc/plan.md), [RKE2 upgrades](https://docs.rke2.io/upgrades/automated), [SUSE Micro 6.2](https://documentation.suse.com/sle-micro/6.2/html/Micro-transactional-updates/index.html), [drain Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/), [Secrets/stringData](https://kubernetes.io/docs/concepts/configuration/secret/), [Longhorn 1.11.2](https://longhorn.io/docs/1.11.2/maintenance/maintenance/) , [Zypper Leap 16.0](https://manpages.opensuse.org/Leap-16.0/zypper/zypper.8.en.html) e [Fleet YAML](https://fleet.rancher.io/explanations/gitrepo-content). Scripts próprios, sem homologação formal da SUSE.
+1. Aguarde qualquer instalação/reboot ativo terminar. Encerre as tentativas antigas de OS que falharam antes de atualizar o Secret; um Pod antigo continua executando o script que carregou.
+2. Substitua os Plans e o Secret deste perfil pelo Fleet, com uma nova `version` comum aos dois Plans. Não remova os Plans de Kubernetes/Rancher.
+3. O código novo não consulta nem cria `suc-os-maintenance-gate`. Depois de encerrar os Jobs antigos, esse ConfigMap antigo pode ser excluído uma única vez. Os Jobs `suc-os-schedules-*` concluídos também não são mais utilizados. Não apague arquivos de estado do host durante uma transação antiga.
+4. Se a falha antiga deixou o nó cordonado antes do update, a nova preparação aceita o cordon do próprio nó e executa o drain normalmente; não é necessário liberar o agendamento para contornar a validação.
+
+## Base e validação
+
+A estrutura foi comparada com o [exemplo do Matheus Nagata](https://github.com/matheusnagata/fleet/blob/main/os-upgrade-sles/server-plan.yaml). Foram adotados o drain nativo e o fluxo direto. Diferenças: falhas de API não passam silenciosamente, o reboot usa a indicação do SO, os workers esperam os servidores e o descarte de emptyDir/remoção forçada não são habilitados por padrão.
+
+Referências: [ordem prepare/drain/upgrade no SUC](https://github.com/rancher/system-upgrade-controller/blob/v0.19.1/pkg/upgrade/job/job.go), [drain do Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/), [manutenção de nós com Longhorn](https://longhorn.io/docs/1.11.2/maintenance/maintenance/).
+
+Validação em 20/10/2026, usando SUC v0.19.1 e RKE2 v1.35.6:
+
+- **SUSE Linux Micro 6.2:** cinco nós concluíram a rodada pelo Fleet, servidores antes dos workers, sem sobreposição de atualizações no cluster. O drain dos workers aguardou os PDBs do Longhorn; após uncordon, o script aguardou a recuperação dos volumes antes de concluir.
+- **openSUSE Leap 16:** três servidores concluíram a rodada pelo Fleet, sem Longhorn. O código tratou a ausência do CRD normalmente.
+- **Sem updates disponíveis:** transactional-update e Zypper executaram consultas reais, sem novos pacotes. Nenhum dos oito nós reiniciou; os identificadores de boot permaneceram iguais.
+- **Falha por emptyDir:** o drain nativo interrompeu a tentativa, e o container upgrade não iniciou. Depois da autorização de descarte apenas no lab, a tentativa seguinte aceitou o próprio nó já cordonado e concluiu.
+- **Falha por PDB:** um Pod temporário com PDB bloqueando eviction fez o drain repetir as tentativas até o timeout de 20s configurado somente no teste. O container upgrade permaneceu sem iniciar. Os recursos do teste foram removidos e o nó liberado.
+- **Sem trava própria:** nenhum ConfigMap suc-os-maintenance-gate foi criado durante as rodadas. A criação de Jobs suc-os-schedules também foi removida.
+- **Validação local:** sintaxe dos YAMLs e scripts, dry-run na API e cenários simulados de falha de API, cordon, saúde, Longhorn ausente/degradado, falha do gerenciador de pacotes e reboot/retomada dos três perfis.
+
+Os Plans publicados mantêm `deleteEmptydirData: false`. A exceção `true` usada no lab não foi incorporada aos exemplos. Ubuntu teve validação estática e simulada, sem cluster Ubuntu disponível. Instalação de novos pacotes e reboot desta revisão foram simulados; não aconteceram na rodada real porque os nós já estavam atualizados. Esses testes não comprovam todos os ambientes de cliente.
