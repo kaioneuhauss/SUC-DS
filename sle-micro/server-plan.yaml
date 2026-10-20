@@ -14,7 +14,7 @@ spec:
   # ALTERAÇÃO HABITUAL: mudar este identificador nos DOIS Plans juntos.
   # Dispara os updates disponíveis; não seleciona uma nova release do SO.
   # Espere a rodada atual terminar antes de mudar novamente.
-  version: os-20261020-simple-01
+  version: 20-10-2026-update-so
 
   nodeSelector:
     matchLabels:
