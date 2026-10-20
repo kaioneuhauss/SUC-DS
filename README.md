@@ -159,7 +159,7 @@ A simplificação desta revisão elimina as duas verificações de saúde repeti
 ## O que acontece em cada etapa
 
 1. **prepare:** organiza a ordem; nos workers, descobre e espera todos os servers na mesma version/hash. Não altera o host nem repete a checagem de saúde.
-2. **upgrade / trava:** descobre os nós, reserva a manutenção para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, bloqueia outros Jobs de manutenção conflitantes e prepara automaticamente os agendamentos de todos os destinos. Em seguida, exige 60 segundos contínuos de saúde: API, Ready, pressão, cordon, heartbeats, workloads e Longhorn quando presente. Essa validação ocorre uma vez, imediatamente antes do drain.
+2. **upgrade / trava:** descobre os nós, reserva a manutenção para um nó, confere SO, espaço, ferramentas e compatibilidade do cliente, bloqueia outros Jobs de manutenção conflitantes e prepara automaticamente os agendamentos de todos os destinos. Em seguida, exige 60 segundos contínuos de saúde: API, Ready, pressão, heartbeats, workloads e Longhorn quando presente. O próprio nó reservado pode estar cordonado por uma tentativa anterior; os outros nós precisam estar com agendamento liberado. Essa validação ocorre uma vez, imediatamente antes do drain. Após a atualização, todos os nós precisam estar liberados novamente.
 3. **upgrade / drain:** faz cordon, verifica volumes e evacua workloads respeitando PDBs. Não usa force nem remove finalizers. O drain está no script para não ser repetido automaticamente após reboot.
 4. **upgrade / SO:** informa que o backup etcd fica sob controle do operador e executa a transação no systemd do host. A saída aparece no log do container e fica persistida no host. Sem alterações, não há reboot.
 5. **upgrade / validação:** quando houve reboot, confere boot ID e, no Micro, o snapshot ativo. Espera RKE2 ativo, faz uncordon, aguarda recuperação dos workloads/volumes por 60 segundos e só então libera a trava.
@@ -175,7 +175,9 @@ Etapa 6 de 6 — Concluir a manutenção deste nó
 [CONCLUIDO] Não havia atualizações disponíveis. Este nó não foi reiniciado. O cluster está saudável; o próximo nó já pode começar.
 ```
 
-Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquele Pod não executará novas etapas, e `[COMO CORRIGIR]` orienta o diagnóstico. Falha fatal no prepare tenta registrar a mesma trava global em failed, sem sobrescrever uma manutenção existente. O upgrade preserva a trava em failed, inclusive em falha da preparação automática dos agendamentos. O SUC pode recriar o Pod, mas uma trava em failed impede que essa repetição pule a falha. Se a API estiver indisponível, o log informa que não foi possível confirmar a gravação da trava; confira seu estado. Uma trava já existente em updating/verifying, com o mesmo nó e hash, permite retomar a transação persistida após reboot. Um worker também interrompe a espera se encontrar a trava em failed.
+Em falha, `[ERRO]` identifica etapa e motivo, `[INTERROMPIDO]` informa que aquele Pod não executará novas etapas, e `[COMO CORRIGIR]` orienta o diagnóstico. O **prepare apenas consulta**: nunca cria, altera ou apaga a trava. Ao encontrar uma falha anterior, o worker permanece aguardando, identifica o nó que falhou e não inicia drain/update. Corrigida e liberada a falha original, ele reavalia os servidores; o limite `WAIT_TIMEOUT` continua valendo. Erros de consulta ou timeout encerram o prepare sem criar outra trava.
+
+Somente o upgrade que reservou a manutenção pode registrar `failed`. A atualização da fase testa UID, nó e hash na API: um Pod antigo não pode marcar outra reserva como falha, mesmo que o ConfigMap tenha sido recriado com o mesmo nome. Falhas após adquirir a reserva, inclusive nos agendamentos, continuam bloqueando o avanço. Uma reserva em `updating`/`verifying`, com o mesmo nó e hash, permite retomar a transação persistida após reboot.
 
 **Interromper o procedimento não é desfazer pacotes já instalados nem matar uma transação ativa.** Se o systemd ainda estiver executando a transação, o log avisa para verificar seu resultado antes de qualquer recuperação. Isso evita interromper escrita de pacotes à força.
 
@@ -237,6 +239,8 @@ Os padrões avançados estão comentados no começo de `common.sh`:
 
 `NODE`, `PLAN`, `HASH` e a version são fornecidos pelo SUC ao Job. `EXPECTED_NODES` e `SERVER_NODES` vêm da descoberta na API; não são parâmetros para preencher. `STATE` guarda o resultado em `/var/lib/suc-os/HASH` no host. A trava `suc-os-maintenance-gate` não expira automaticamente: uma falha não autoriza o próximo nó.
 
+Existe **um único ConfigMap de reserva para servers e workers**. Ele é criado no início de cada manutenção e apagado depois da validação final. `preflight`, `draining`, `updating` e `verifying` representam etapas da manutenção; a simples existência do objeto não é erro. `failed` representa uma interrupção que exige diagnóstico. Não exclua uma reserva de uma execução em andamento.
+
 ## Agendamentos automáticos e volumes
 
 O primeiro deploy já inicia a atualização. Não existe mais a rodada `prepare-host`, o parâmetro `ACTION` nos Plans ou a exigência da anotação `suc-os.cattle.io/automatic-updates=disabled`. Anotações antigas não liberam nem bloqueiam a rotina.
@@ -258,6 +262,8 @@ Longhorn é opcional. Sem API/volumes Longhorn, a validação segue com PDBs e p
 
 PVC local, hostPath de aplicação e CSI não revisado bloqueiam antes do drain. Isso exige avaliar o backend e o workload, não apagar volume/finalizer. Em `policy.json`, `allowEmptyDirDeletion: true` foi autorizado para os dados temporários dos laboratórios SLE Micro e Rancher, incluindo filas de telemetria do Rancher; use false sem essa autorização. `hostPathAllowlist` contém exceções específicas de infraestrutura (no Rancher, diretórios de certificados do controller SUC, identificados por namespace/ServiceAccount/owner/path); `remoteCSIDrivers` aceita apenas backends remotos previamente revisados. PDBs, falha de saúde, espaço, repositório ou compatibilidade também podem bloquear: o bloqueio não significa necessariamente corrupção de dados.
 
+O diretório `/var/lib/longhorn/metadata` (com ou sem barra final) é reconhecido somente para Pods do namespace `longhorn-system`, ServiceAccount `longhorn-service-account` e owner `InstanceManager`. O [código do Longhorn](https://github.com/longhorn/longhorn-manager/blob/v1.12.1/controller/instance_manager_controller.go) monta esse diretório como infraestrutura do instance-manager. A exceção não apaga metadados nem dispensa saúde, réplicas redundantes ou PDBs. Outro namespace, conta, owner ou caminho continua exigindo revisão.
+
 ### DNS e dependências
 
 Valide resolução de nomes e disponibilidade dos serviços usados pelo cluster antes da manutenção. Falhas de DNS ou aplicações indisponíveis bloqueiam o avanço. Ajustes de infraestrutura devem seguir o ambiente de destino; este procedimento não fornece IPs ou domínios internos como padrão.
@@ -278,6 +284,19 @@ kubectl -n cattle-system logs NOME_DO_POD -c upgrade -f
 
 Em erro, leia a mensagem `[ERRO]`/`[ACAO NECESSARIA]`, a trava e, no host envolvido, `journalctl -u suc-os-HASH.service` e `/var/lib/suc-os/HASH/operation.log`. Corrija a causa; confirme que não há transação/reboot ativo e que o nó/volumes estão recuperados antes de qualquer liberação manual. Não apague a trava para pular uma falha. Snapshot local etcd não substitui backup externo.
 
+### Recuperar uma falha anterior ao drain/update
+
+Este procedimento se aplica quando os logs comprovam que a execução parou antes de iniciar a transação do SO, como no bloqueio de um hostPath ainda não reconhecido. Uma falha durante atualização/reboot exige primeiro conferir a unidade do host e seu estado persistido.
+
+1. Guarde os logs do Pod e o YAML de `suc-os-maintenance-gate`. Confira `data.node`, `data.hash` e `data.phase`. A reserva deve estar em `failed`; uma reserva ativa não deve ser liberada.
+2. Suspenda o Job antigo que falhou (`kubectl -n cattle-system patch job NOME_DO_JOB --type=merge -p '{"spec":{"suspend":true}}'`) e aguarde seus Pods terminarem. Faça isso somente depois de confirmar que não há transação/reboot ativo no host. Não altere os Jobs `suc-os-schedules-*` concluídos nem suspenda outros upgrades do cluster.
+3. Corrija a causa nos arquivos do Git usados pelo Fleet. Preserve imagem, política de volumes e demais ajustes próprios do ambiente. **Alterar o Secret modifica o hash do SUC e pode iniciar uma nova rodada nos servidores e workers, mesmo mantendo `version`.** Mantenha a reserva `failed` enquanto o Fleet entrega os arquivos corrigidos.
+4. Confirme que o Secret recebeu a correção e que os Plans resolveram os novos hashes. Exclua apenas o Job antigo identificado no passo 2 e confirme que os Pods daquela tentativa desapareceram. A nova execução deve usar os novos hashes e continuará bloqueada pela reserva antiga.
+5. Se o nó ficou cordonado exclusivamente por essa tentativa interrompida, execute `kubectl uncordon NOME_DO_NO` para recuperar o agendamento. Confira nós e volumes. Releia a reserva para confirmar que continua sendo a mesma falha diagnosticada; só então exclua `suc-os-maintenance-gate`.
+6. Acompanhe os novos logs. O SUC continua a fila; um novo ConfigMap com fase `preflight` é esperado. Não altere novamente `version` nem exclua a nova reserva.
+
+Publicar o código não encerra automaticamente um Bash já em execução. Por isso, encerrar as tentativas antigas faz parte da migração; apagar apenas o ConfigMap pode permitir que uma tentativa antiga registre a falha novamente.
+
 ## Revisão do código e limites de segurança
 
 A serialização, a trava persistente, os PDBs, a proteção dos volumes e a confirmação de saúde são necessárias para este procedimento. `concurrency: 1` sozinho não coordena dois Plans, e `exclusive` protege a execução por nó; por isso a trava global foi mantida. O drain dentro do script permite reconhecer retomada sem repetir uma transação depois do reboot.
@@ -289,6 +308,8 @@ Também foram corrigidos dois pontos: `TimeoutStartSec=infinity` impede que o li
 Isso é um procedimento próprio, não uma certificação de compatibilidade de qualquer SO/kernel/pacote com RKE2. A conta existente permanece com as permissões que já possui; revise esse acesso antes de usar em outro cluster. `allowEmptyDirDeletion: true` dos perfis SUSE é uma autorização de lab, não um padrão recomendado para outros clusters. Os limites de tempo e espaço são mínimos operacionais e precisam comportar o tamanho real do ambiente.
 
 ## Validação e limites
+
+- Correção de reserva e retomada (20/10/2026): 82 cenários locais com API/host simulados, cobrindo prepare sem escrita, espera e retomada após falha anterior, rejeição de Pod com reserva obsoleta, cordon do próprio nó versus de outro nó, logs, regra restrita de metadados Longhorn e fluxo de drain/update/recuperação. Os 11 YAMLs e a sintaxe dos 27 scripts Bash foram verificados. Não representa execução real dessa correção no cluster do cliente.
 
 - Simplificação do drain (19/10/2026): 43 testes locais aprovados. Os novos cenários executam o fluxo com comandos simulados e verificam falha de saúde antes do cordon, falha de drain sem update/uncordon, volume local bloqueado, retomada sem segundo drain/transação e rejeição de rollback inesperado no Micro.
 
