@@ -14,7 +14,7 @@ Não há chart próprio, ConfigMap de trava, anotações de preparação, Jobs a
 
 1. Confira que o cluster tem o **System Upgrade Controller**, o CRD `plans.upgrade.cattle.io` e a ServiceAccount `system-upgrade-controller` em `cattle-system`. Criar os Plans não instala o controller.
 2. Escolha **somente um diretório**, conforme o SO. No Fleet, configure o GitRepo para esse caminho e para o cluster correto. Não aponte para a raiz nem combine perfis no mesmo cluster.
-3. Confira a imagem de ferramentas dos Plans, os seletores de função e `drain.deleteEmptydirData`. O padrão `false` interrompe o drain se houver dados em `emptyDir`; altere para `true` somente quando aceitar descartá-los. PVCs não são apagados por essa opção.
+3. Confira a imagem de ferramentas dos Plans, os seletores de função e `drain.deleteEmptydirData`. Os exemplos deste lab estão em `true`: o drain pode descartar dados temporários em `emptyDir`. Para um ambiente que não autorize essa perda, mude para `false` antes de aplicar; nesse caso, o drain interrompe a atualização se encontrar esses Pods. PVCs não são apagados por essa opção.
 4. Publique os arquivos no Git. O primeiro deploy já inicia a rodada definida em `version`.
 5. Nas próximas manutenções, altere **somente `version`**, com o mesmo valor nos Plans de servers e agents. Exemplo: `os-20261021-01`. Aguarde uma rodada concluir antes de publicar outra.
 
@@ -51,7 +51,7 @@ A imagem do init container `drain` é definida na configuração do **controller
 
 São quatro blocos pequenos, dentro de um único YAML:
 
-- `common.sh`: logs coloridos, consulta de nós e recuperação do Longhorn quando instalado. Falha de API é tratada como erro; ausência de Longhorn é normal.
+- `common.sh`: logs coloridos, consulta dos nós pelo IP interno da API e recuperação do Longhorn quando instalado. Falhas transitórias da API são repetidas até o limite de saúde; falha persistente interrompe. Ausência de Longhorn é normal.
 - `prepare.sh`: nos workers, espera o Plan de servidores; depois verifica nós `Ready`, pressão e cordon dos outros nós. O cordon do próprio nó não bloqueia a retomada. Não escreve objetos Kubernetes.
 - `upgrade.sh`: só é iniciado após o drain nativo. Executa o script do SO no host, faz uncordon e espera a recuperação antes de concluir o Job.
 - `host-update.sh`: identifica o SO, executa seu gerenciador de pacotes e reinicia apenas quando necessário. Um pequeno registro em `/var/lib/suc-os-simple/HASH/` permite retomar após reboot sem instalar tudo novamente; não é uma trava e não precisa ser excluído para operar uma nova versão.
@@ -63,6 +63,8 @@ Os limites opcionais de `common.sh` são `HEALTH_TIMEOUT=900` (15 minutos), `STA
 | Micro | `transactional-update --non-interactive --drop-if-no-change up` | Uma nova raiz Btrfs precisa ser ativada. Sem alteração, não reinicia. Se já houver snapshot pendente, ativa-o primeiro e informa que uma nova consulta de pacotes fica para outra rodada. |
 | openSUSE/SLES | `zypper --non-interactive refresh` e `zypper --non-interactive update` | Retorno 102 do Zypper/`needs-rebooting`. Outros erros interrompem; não é feita busca por palavras como `kernel` na saída. |
 | Ubuntu | `apt-get update` e `apt-get --assume-yes --with-new-pkgs --no-remove upgrade` | `/run/reboot-required`. Preserva arquivos locais de configuração e não permite remoção automática de pacotes. |
+
+No Ubuntu, `needrestart` apenas lista serviços que precisam de restart; não reinicia o RKE2 no meio do `apt`. Se o Ubuntu não pedir reboot, planeje o restart dos serviços listados em uma manutenção separada.
 
 Um pedido de reboot que já estava pendente também é atendido depois do drain. Durante o reboot, o Pod pode terminar e o Job criar outro: o registro local confirma a mudança do boot antes de concluir. Com drain nativo, uma nova tentativa de Pod passa novamente por `prepare` e `drain`; não repete a instalação já registrada.
 
@@ -126,4 +128,4 @@ Validação em 20/10/2026, usando SUC v0.19.1 e RKE2 v1.35.6:
 - **Sem trava própria:** nenhum ConfigMap suc-os-maintenance-gate foi criado durante as rodadas. A criação de Jobs suc-os-schedules também foi removida.
 - **Validação local:** sintaxe dos YAMLs e scripts, dry-run na API e cenários simulados de falha de API, cordon, saúde, Longhorn ausente/degradado, falha do gerenciador de pacotes e reboot/retomada dos três perfis.
 
-Os Plans publicados mantêm `deleteEmptydirData: false`. A exceção `true` usada no lab não foi incorporada aos exemplos. Ubuntu teve validação estática e simulada, sem cluster Ubuntu disponível. Instalação de novos pacotes e reboot desta revisão foram simulados; não aconteceram na rodada real porque os nós já estavam atualizados. Esses testes não comprovam todos os ambientes de cliente.
+Os Plans atuais deste lab usam `deleteEmptydirData: true`; revise esse valor antes de copiar para outro cluster. Em 23/10/2026, uma rodada Ubuntu real instalou pacotes e reiniciou masters, revelando uma falha transitória de DNS no `prepare` após reboot. Os três perfis agora usam o IP interno da API e aguardam sua recuperação; a correção passou na validação local, mas uma nova rodada completa com o código corrigido ainda depende da execução manual. Esses testes não comprovam todos os ambientes de cliente.
