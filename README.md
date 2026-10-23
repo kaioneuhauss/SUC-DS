@@ -68,10 +68,23 @@ No Ubuntu, `needrestart` apenas lista serviços que precisam de restart; não re
 
 Um pedido de reboot que já estava pendente também é atendido depois do drain. Durante o reboot, o Pod pode terminar e o Job criar outro: o registro local confirma a mudança do boot antes de concluir. Com drain nativo, uma nova tentativa de Pod passa novamente por `prepare` e `drain`; não repete a instalação já registrada.
 
-## Acompanhar e tratar uma falha
+## Saber se a rodada terminou
+
+O Deployment `system-upgrade-controller` normalmente continua em execução depois da manutenção. Para saber se **o update do SO** ainda está em andamento, consulte os Plans e os Jobs:
 
 ```bash
 kubectl -n cattle-system get plans
+kubectl -n cattle-system get jobs -l 'upgrade.cattle.io/plan in (os-maintenance-server,os-maintenance-agent,os-maintenance-zypper)'
+kubectl get nodes
+```
+
+Em Ubuntu e SLE Micro, aguarde `COMPLETE=True` nos Plans `os-maintenance-server` e `os-maintenance-agent`. Em openSUSE/SLES, confira apenas `os-maintenance-zypper`. `COMPLETE=False` com Job ativo indica que a rodada continua; `COMPLETE=False` sem Job ativo exige conferir o Plan e os eventos, pois ela pode estar bloqueada. Durante a manutenção, o nó pode aparecer como `Ready,SchedulingDisabled`; ao final, confira que voltou a `Ready` sem cordon. Jobs concluídos podem permanecer visíveis até a limpeza automática configurada no controller (900 segundos no lab); isso não significa que ainda estejam atualizando. A condição `COMPLETE=True` não comprova que todas as aplicações voltaram a ficar prontas.
+
+Para acompanhar mudanças em tempo real, acrescente `-w` ao comando `kubectl get plans`.
+
+## Acompanhar e tratar uma falha
+
+```bash
 kubectl -n cattle-system get pods -l upgrade.cattle.io/plan -o wide
 kubectl -n cattle-system logs NOME_DO_POD -c prepare
 kubectl -n cattle-system logs NOME_DO_POD -c drain
